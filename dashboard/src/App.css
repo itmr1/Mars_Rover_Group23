@@ -1,0 +1,54 @@
+
+.App {
+  display:flex;
+  flex-direction: column;
+  text-align: center;
+  caret-color: transparent;
+  min-height: 100vh;
+  justify-content: center;
+}
+
+
+.Components {
+  display:flex;
+  flex-direction: row;
+  
+  /*justify-content: space-between;*/
+}
+
+body {
+  min-width: 100% !important;
+  background-color: #d9d9d9 !important;
+}
+
+.Map {
+  margin: 10px;
+  display:flex;
+  align-items: center;
+  flex-grow: 1;
+}
+
+
+
+h3 {
+  text-decoration: underline;
+  font-size: 23px;
+}
+
+
+.Dashboard {
+  display:flex;
+  flex-direction: column;
+  justify-content: center;
+  margin-right: 50px;
+  min-width:400px;
+}
+
+p {
+  font-size: 17px;
+  font-weight: bold;
+}
+
+
+
+

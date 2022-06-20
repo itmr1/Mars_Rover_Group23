@@ -1,0 +1,16 @@
+.humid{
+    background-color: white;
+    /*background-image: linear-gradient(to bottom right, rgb(255, 255, 255), rgb(121, 121, 121));*/
+    width: 200px;
+    height: fit-content;
+    margin-bottom:10px;
+    border-radius: 20px;
+    align-self: center;
+    padding: 20px;
+    
+    justify-content: center;
+}
+
+#batt{
+    align-self: center;
+}

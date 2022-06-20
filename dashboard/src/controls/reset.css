@@ -1,0 +1,11 @@
+#resetbutt:hover {
+    background-color: rgba(250, 0, 0, 0.6);
+}
+
+
+#resetbutt {
+    border-style: double;
+    border-color: red;
+    border-width: 5px;
+    margin-top: 20px;
+}

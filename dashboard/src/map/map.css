@@ -1,0 +1,26 @@
+.map {
+    display:flex;
+    justify-content: center;
+    flex-direction: column;
+    height:900px;
+    width:900px;
+    background-color: white;
+    border-radius:15px;
+}
+
+#chart{
+    position:relative;
+}
+
+.hide{
+    display: none;
+}
+
+.downloadbutt {
+    /*align-self: center;
+    margin-bottom: 20px;*/
+    position:absolute;
+    top:3px;
+    right:12px;
+    
+}

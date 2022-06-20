@@ -1,0 +1,92 @@
+.show{
+    display:none;
+}
+
+.hidden{
+    display:flex;
+    flex-direction: column;
+    justify-content: center;
+    margin-right:400px;
+}
+
+.startscreen{
+    display:flex;
+    flex-direction: row;
+    
+    justify-content: space-between;
+    align-items: center;
+    flex-grow:1;
+}
+
+
+.daMap {
+    display:flex;
+    flex-direction:column;
+    margin-right: 80px;
+}
+
+.daInput {
+    margin-left: 50px;
+    display:flex;
+    flex-direction: column;
+    margin-right:10px;
+}
+
+.title{
+  margin-bottom:30px; 
+}
+
+.corners{
+    display:grid;
+    grid-template-columns: min-content min-content ;
+    grid-template-rows:min-content min-content;
+    grid-gap:5px;
+    align-self: center;
+    
+}
+
+.butt1 {
+    height:100px;
+    width:100px;
+    border-radius:20px;
+}
+
+.butt2{
+    height:100px;
+    width:100px;
+    border-radius:20px;
+}
+
+.butt3{
+    height:100px;
+    width:100px;
+    border-radius:20px;
+
+}
+
+.butt4{
+    height:100px;
+    width:100px;
+    border-radius:20px;
+}
+
+.buttName{
+    font-size:30px;
+    font-weight:bold;
+    color: red;
+}
+
+.statusdisp {
+    min-width: 300px;
+    padding: 10px;
+    margin: 10px;
+    font-size: 30px;
+    font-weight: bold;
+    color: red;
+    border-style:solid;
+    border-color: black;
+    border-width: 3px;
+    border-radius:20px;
+    align-self:center;
+}
+
