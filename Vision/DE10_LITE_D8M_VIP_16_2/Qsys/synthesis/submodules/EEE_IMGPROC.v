@@ -1,0 +1,877 @@
+module EEE_IMGPROC(
+	// global clock & reset
+	clk,
+	reset_n,
+	
+	// mm slave
+	s_chipselect,
+	s_read,
+	s_write,
+	s_readdata,
+	s_writedata,
+	s_address,
+
+	// stream sink
+	sink_data,
+	sink_valid,
+	sink_ready,
+	sink_sop,
+	sink_eop,
+	
+	// streaming source
+	source_data,
+	source_valid,
+	source_ready,
+	source_sop,
+	source_eop,
+	
+	// conduit
+	mode
+	
+);
+
+
+// global clock & reset
+input	clk;
+input	reset_n;
+
+// mm slave
+input							s_chipselect;
+input							s_read;
+input							s_write;
+output	reg	[31:0]	s_readdata;
+input	[31:0]				s_writedata;
+input	[2:0]					s_address;
+
+
+// streaming sink
+input	[23:0]            	sink_data;
+input								sink_valid;
+output							sink_ready;
+input								sink_sop;
+input								sink_eop;
+
+// streaming source
+output	[23:0]			  	   source_data;
+output								source_valid;
+input									source_ready;
+output								source_sop;
+output								source_eop;
+
+// conduit export
+input                         mode;
+
+////////////////////////////////////////////////////////////////////////
+//
+parameter IMAGE_W = 11'd640;
+parameter IMAGE_H = 11'd480;
+parameter MESSAGE_BUF_MAX = 256;
+parameter MSG_INTERVAL = 6;
+parameter BB_COL_DEFAULT = 24'hff0000;
+
+
+wire [7:0]   red, green, blue, grey;
+wire [7:0]   red_out, green_out, blue_out;
+reg [8:0] hue;
+reg [8:0] hueraw;
+reg [7:0]   sat, val;
+reg [7:0]	 cmax, cmin, cdiff;  
+wire         sop, eop, in_valid, out_ready;
+////////////////////////////////////////////////////////////////////////
+
+initial begin
+	hue = 0;
+	hueraw = 0;
+	sat = 0;
+	cmax = 0;
+	cmin = 0;
+	cdiff = 0;
+	val = 0;
+end
+
+//Convert to hsv
+always @(*) begin
+	cmax = ((red > green) && (red > blue)) ? red : (green > blue) ? green : blue;
+	cmin = ((red < green) && (red < blue)) ? red : (green < blue) ? green : blue;
+
+	cdiff = cmax - cmin; 
+  
+	hueraw = (cdiff == 0) ?
+				0 :  
+			(cmax == red) ? 
+  			    (cmin == blue) ?
+  			        60*(green-blue)/cdiff :
+                -(60*(blue-green)/cdiff): 
+
+			(cmax == green) ?
+                (cmin == red) ?
+				    120 + (60*(blue-red)/cdiff):
+				120 - (60*(red-blue)/cdiff):
+                (cmin == green) ?
+                    240 + (60*(red-green)/cdiff):
+                    240 - (60*(green-red)/cdiff);
+            
+	hue = (hueraw < 0) ? hueraw + 360 : hueraw;
+    sat = (cmax == 0) ? 0 : (100*cdiff/cmax) ;
+  	val = 100*cmax/255;
+end
+
+// Detect red areas and pixel grouping
+wire red_detect, red_detect0;
+reg red_detect1, red_detect2, red_detect3, red_detect4, red_detect5;
+initial begin
+	red_detect1 = 0;
+	red_detect2 = 0;
+	red_detect3 = 0;
+	red_detect4 = 0;
+	red_detect5 = 0;
+end 
+
+assign red_detect0 = (hue >= 6) && (hue <= 24) && (sat >= 69) && (sat <= 94) && (val >= 39) && (val <= 73) && (y >= 182); // HSV done
+
+always @(posedge clk) begin
+	if (~sop & in_valid & packet_video) begin
+		red_detect1 <= red_detect0;
+		red_detect2 <= red_detect1;
+		red_detect3 <= red_detect2;
+		red_detect4 <= red_detect3;
+		red_detect5 <= red_detect4;
+	end
+	if (eop) begin
+		red_detect1 <= 0;
+		red_detect2 <= 0;
+		red_detect3 <= 0;
+		red_detect4 <= 0;
+		red_detect5 <= 0;
+	end	
+
+end
+
+assign red_detect = red_detect1 & red_detect2 & red_detect3;// & red_detect4 & red_detect5;
+
+// Detect lime areas and pixel grouping
+wire lime_detect, lime_detect0;
+reg lime_detect1, lime_detect2, lime_detect3, lime_detect4, lime_detect5;
+initial begin
+	lime_detect1 = 0;
+	lime_detect2 = 0;
+	lime_detect3 = 0;
+	lime_detect4 = 0;
+	lime_detect5 = 0;
+end 
+
+assign lime_detect0 = (hue >= 99) && (hue <= 144) && (sat >= 27) && (sat <= 65) && (val >= 55) && (val <= 75) && (y >= 182); // HSV done
+
+always @(posedge clk) begin
+	if (~sop & in_valid & packet_video) begin
+		lime_detect1 <= lime_detect0;
+		lime_detect2 <= lime_detect1;
+		lime_detect3 <= lime_detect2;
+		lime_detect4 <= lime_detect3;
+		lime_detect5 <= lime_detect4;
+	end
+	if (eop) begin
+		lime_detect1 <= 0;
+		lime_detect2 <= 0;
+		lime_detect3 <= 0;
+		lime_detect4 <= 0;
+		lime_detect5 <= 0;
+	end	
+
+end
+
+assign lime_detect = lime_detect1 & lime_detect2 & lime_detect3 & lime_detect4 & lime_detect5;
+
+// Detect green areas and pixel grouping
+wire green_detect, green_detect0;
+reg green_detect1, green_detect2, green_detect3, green_detect4, green_detect5;
+initial begin
+	green_detect1 = 0;
+	green_detect2 = 0;
+	green_detect3 = 0;
+	green_detect4 = 0;
+	green_detect5 = 0;
+end 
+
+assign green_detect0 = (hue >= 133) && (hue <= 175) && (sat >= 22) && (sat <= 77) && (val >= 17) && (val <= 49) && (y >= 182); // HSV done
+
+always @(posedge clk) begin
+	if (~sop & in_valid & packet_video) begin
+		green_detect1 <= green_detect0;
+		green_detect2 <= green_detect1;
+		green_detect3 <= green_detect2;
+		green_detect4 <= green_detect3;
+		green_detect5 <= green_detect4;
+	end
+	if (eop) begin
+		green_detect1 <= 0;
+		green_detect2 <= 0;
+		green_detect3 <= 0;
+		green_detect4 <= 0;
+		green_detect5 <= 0;
+	end	
+
+end
+
+assign green_detect = green_detect1 & green_detect2 & green_detect3 & green_detect4 & green_detect5;
+
+//Detect yellow areas and pixel grouping
+wire yellow_detect, yellow_detect0;
+reg yellow_detect1, yellow_detect2, yellow_detect3, yellow_detect4, yellow_detect5;
+initial begin
+	yellow_detect1 = 0;
+	yellow_detect2 = 0;
+	yellow_detect3 = 0;
+	yellow_detect4 = 0;
+	yellow_detect5 = 0;
+end 
+
+
+assign yellow_detect0 = (hue >= 41) && (hue <= 62) && (sat >= 53) && (sat <= 77) && (val >= 46) && (val <= 93) && (y >= 182); // HSV done
+
+always @(posedge clk) begin
+	if (~sop & in_valid & packet_video) begin
+		yellow_detect1 <= yellow_detect0;
+		yellow_detect2 <= yellow_detect1;
+		yellow_detect3 <= yellow_detect2;
+		yellow_detect4 <= yellow_detect3;
+		yellow_detect5 <= yellow_detect4;
+	end
+	if (eop) begin
+		yellow_detect1 <= 0;
+		yellow_detect2 <= 0;
+		yellow_detect3 <= 0;
+		yellow_detect4 <= 0;
+		yellow_detect5 <= 0;
+	end	
+
+end
+
+assign yellow_detect = yellow_detect1 & yellow_detect2 & yellow_detect3 & yellow_detect4 & yellow_detect5;
+
+
+//Detect pink areas and pixel grouping
+wire pink_detect, pink_detect0;
+reg [14:0] pink_detect_reg;
+initial begin
+	pink_detect_reg = 0;
+end 
+
+
+assign pink_detect0 = (hue >= 4) && (hue <= 17) && (sat >= 52) && (sat <= 75) && (val >= 87) && (val <= 100) && (y >= 182); //HSV done
+
+always @(posedge clk) begin
+	if (~sop & in_valid & packet_video) begin
+		pink_detect_reg <= {pink_detect_reg[13:0], pink_detect0};
+	end
+	if (eop) begin
+		pink_detect_reg <= 0;
+	end	
+
+end
+
+assign pink_detect = pink_detect_reg[0] & pink_detect_reg[1] & pink_detect_reg[2] & pink_detect_reg[3] & pink_detect_reg[4] & pink_detect_reg[5] & pink_detect_reg[6] & pink_detect_reg[7] & pink_detect_reg[8] & pink_detect_reg[9] & pink_detect_reg[10] & pink_detect_reg[11] & pink_detect_reg[12] & pink_detect_reg[13] & pink_detect_reg[14];
+
+
+//Detect blue areas and pixel grouping
+wire blue_detect, blue_detect0;
+reg blue_detect1, blue_detect2, blue_detect3, blue_detect4, blue_detect5;
+initial begin
+	blue_detect1 = 0;
+	blue_detect2 = 0;
+	blue_detect3 = 0;
+	blue_detect4 = 0;
+	blue_detect5 = 0;
+end 
+
+
+assign blue_detect0 = (hue >= 199) && (hue <= 240) && (sat >= 35) && (sat <= 100) && (val >= 16) && (val <= 47) && (y >= 182); //HSV done
+
+always @(posedge clk) begin
+	if (~sop & in_valid & packet_video) begin
+		blue_detect1 <= blue_detect0;
+		blue_detect2 <= blue_detect1;
+		blue_detect3 <= blue_detect2;
+		blue_detect4 <= blue_detect3;
+		blue_detect5 <= blue_detect4;
+	end
+	if (eop) begin
+		blue_detect1 <= 0;
+		blue_detect2 <= 0;
+		blue_detect3 <= 0;
+		blue_detect4 <= 0;
+		blue_detect5 <= 0;
+	end	
+
+end
+
+assign blue_detect = blue_detect1 & blue_detect2 & blue_detect3 & blue_detect4 & blue_detect5;
+
+//Detect black and white edges
+wire edge_detect_hor, edge_detect;
+reg[19194:0] edge_detect_reg;
+wire [9:0] val_left, val_right;
+reg [7:0] val1, val2, val3, val4, val5, val6, val7, val8, val9;
+
+initial begin
+	val1 = 0;
+	val2 = 0;
+	val3 = 0;
+	val4 = 0;
+	val5 = 0;
+	val6 = 0;
+	val7 = 0;
+	val8 = 0;
+	val9 = 0;
+	edge_detect_reg = 0;
+end 
+
+assign edge_detect_hor = (val_left > val_right) ? 
+						((val_left - val_right) > 225):
+						((val_right - val_left) > 225);
+
+assign edge_detect = (edge_detect_reg[634] & edge_detect_reg[1274] & edge_detect_reg[1914] & edge_detect_reg[2554] & edge_detect_reg[3194] & edge_detect_reg[3834] & edge_detect_reg[4474] & edge_detect_reg[5114] & edge_detect_reg[5754] & edge_detect_reg[6394]
+					 & edge_detect_reg[7034] & edge_detect_reg[7674] & edge_detect_reg[8314] & edge_detect_reg[8954] & edge_detect_reg[9594] & edge_detect_reg[10234] & edge_detect_reg[10874] & edge_detect_reg[11514] & edge_detect_reg[12154] & edge_detect_reg[12794]
+					 & edge_detect_reg[13434] & edge_detect_reg[14074] & edge_detect_reg[14714] & edge_detect_reg[15354] & edge_detect_reg[15994] & edge_detect_reg[16634] & edge_detect_reg[17274] & edge_detect_reg[17914] & edge_detect_reg[18554] & edge_detect_reg[19194]);
+
+always @(posedge clk) begin
+	if (~sop & in_valid & packet_video) begin
+		val1 <= val;
+		val2 <= val1;
+		val3 <= val2;
+		val4 <= val3;
+		val5 <= val4;
+		val6 <= val5;
+		val7 <= val6;
+		val8 <= val7;
+		val9 <= val8;
+		edge_detect_reg <= {edge_detect_reg[19193:0], edge_detect_hor};
+		
+	end
+	if (eop) begin
+		val1 <= 0;
+		val2 <= 0;
+		val3 <= 0;
+		val4 <= 0;
+		val5 <= 0;
+		val6 <= 0;
+		val7 <= 0;
+		val8 <= 0;
+		val9 <= 0;
+		edge_detect_reg <= 0;
+	end	
+end
+
+assign val_right = val + val1 + val2 + val3 + val4;
+assign val_left = val5 + val6 + val7 + val8 + val9;
+
+// Find boundary of cursor box
+
+// Highlight detected areas
+wire [23:0] color_high;
+assign grey = green[7:1] + red[7:2] + blue[7:2]; //Grey = green/2 + red/4 + blue/4
+assign color_high  = red_detect0 ? 
+						{8'hff, 8'h0, 8'h0} : 
+					lime_detect0 ? 	
+					 	{8'h00, 8'hff, 8'h00} : 
+					green_detect0 ? 	
+					 	{8'h00, 8'h8f, 8'h00} : 
+ 					yellow_detect0 ? 
+					 	{8'hff, 8'hff, 8'h0} : 
+					pink_detect0 ? 
+					 	{8'hff, 8'h00, 8'hff} : 
+					blue_detect0 ? 	
+					 	{8'h00, 8'h0, 8'hff} : 
+					edge_detect ? 
+						{8'h00, 8'hff, 8'hff} :
+						{grey, grey, grey};
+
+// Show bounding boxes
+wire [23:0] new_image;
+wire bb_active_red, bb_active_lime, bb_active_green, bb_active_yellow, bb_active_pink, bb_active_blue, bb_active_build, bb_active_mid;
+assign bb_active_red = (x == left_red) | (x == right_red); //| (y == top_red) | (y == bottom_red);
+assign bb_active_lime = (x == left_lime) | (x == right_lime);// | (y == top_lime) | (y == bottom_lime);
+assign bb_active_green = (x == left_green) | (x == right_green);// | (y == top_green) | (y == bottom_green);
+assign bb_active_yellow = (x == left_yellow) | (x == right_yellow);// | (y == top_yellow) | (y == bottom_yellow);
+assign bb_active_pink = (x == left_pink) | (x == right_pink) ;// (y == top_pink) | (y == bottom_pink);
+assign bb_active_blue = (x == left_blue) | (x == right_blue) ;// (y == top_blue) | (y == bottom_blue);
+assign bb_active_build = (x == left_build) | (x == right_build);// | (y == top_build) | (y == bottom_build);
+assign bb_active_mid = (x == right_mid) | (x == (right_mid - width_mid));
+assign new_image =  bb_active_red ? 
+					 	{8'hff, 8'h00, 8'h00} : 
+					bb_active_lime ? 	
+						{8'h00, 8'hff, 8'h00} : 
+					bb_active_green ? 	
+						{8'h00, 8'h8f, 8'h00} : 
+					bb_active_yellow ?
+						{8'hff, 8'hff, 8'h0} :
+					bb_active_pink ?
+						{8'hff, 8'h00, 8'hff} :
+					bb_active_blue ?
+						{8'h00, 8'h00, 8'hff} :
+					bb_active_mid ?
+						{8'h00, 8'h8f, 8'h8f} :
+					bb_active_build ?
+						{8'h00, 8'hff, 8'hff} :
+						color_high;
+
+
+// Switch output pixels depending on mode switch
+// Don't modify the start-of-packet word - it's a packet discriptor
+// Don't modify data in non-video packets
+assign {red_out, green_out, blue_out} = (mode & ~sop & packet_video) ? new_image : {red,green,blue};
+
+//Count valid pixels to get the image coordinates. Reset and detect packet type on Start of Packet.
+reg [10:0] x, y;
+reg packet_video;
+always@(posedge clk) begin
+	if (sop) begin
+		x <= 11'h0;
+		y <= 11'h0;
+		packet_video <= (blue[3:0] == 3'h0);
+	end
+	else if (in_valid) begin
+		if (x == IMAGE_W-1) begin
+			x <= 11'h0;
+			y <= y + 11'h1;
+		end
+		else begin
+			x <= x + 11'h1;
+		end
+	end
+end
+
+//Find first and last colored pixels
+reg [10:0] x_min_red, y_min_red, x_max_red, y_max_red;
+reg [10:0] x_min_lime, y_min_lime, x_max_lime, y_max_lime;
+reg [10:0] x_min_green, y_min_green, x_max_green, y_max_green;
+reg [10:0] x_min_yellow, y_min_yellow, x_max_yellow, y_max_yellow;
+reg [10:0] x_min_pink, y_min_pink, x_max_pink, y_max_pink;
+reg [10:0] x_min_blue, y_min_blue, x_max_blue, y_max_blue;
+reg [10:0] x_min_build, y_min_build, x_max_build, y_max_build;
+
+
+
+always@(posedge clk) begin
+	if (red_detect & in_valid) begin	//Update bounds when the pixel is red
+		if (x < x_min_red) x_min_red <= x;
+		if (x > x_max_red) x_max_red <= x;
+		if (y < y_min_red) y_min_red <= y;
+		y_max_red <= y;
+	end
+	if (lime_detect & in_valid) begin	//Update bounds when the pixel is lime
+		if (x < x_min_lime) x_min_lime <= x;
+		if (x > x_max_lime) x_max_lime <= x;
+		if (y < y_min_lime) y_min_lime <= y;
+		y_max_lime <= y;
+	end
+	if (green_detect & in_valid) begin	//Update bounds when the pixel is green
+		if (x < x_min_green) x_min_green <= x;
+		if (x > x_max_green) x_max_green <= x;
+		if (y < y_min_green) y_min_green <= y;
+		y_max_green <= y;
+	end
+	if (yellow_detect & in_valid) begin	//Update bounds when the pixel is yellow
+		if (x < x_min_yellow) x_min_yellow <= x;
+		if (x > x_max_yellow) x_max_yellow <= x;
+		if (y < y_min_yellow) y_min_yellow <= y;
+		y_max_yellow <= y;
+	end
+	if (pink_detect & in_valid) begin	//Update bounds when the pixel is pink
+		if (x < x_min_pink) x_min_pink <= x;
+		if (x > x_max_pink) x_max_pink <= x;
+		if (y < y_min_pink) y_min_pink <= y;
+		y_max_pink <= y;
+	end
+	if (blue_detect & in_valid) begin	//Update bounds when the pixel is blue
+		if (x < x_min_blue) x_min_blue <= x;
+		if (x > x_max_blue) x_max_blue <= x;
+		if (y < y_min_blue) y_min_blue <= y;
+		y_max_blue <= y;
+	end
+	if (edge_detect & in_valid) begin	//Update bounds when the pixel is an edge
+		if ((x < x_min_build) && (x > 10) && (x < 630)) x_min_build <= x;
+		if ((x > x_max_build) && (x > 10) && (x < 630)) x_max_build <= x;
+		if ((y < y_min_build) && (x > 10) && (x < 630)) y_min_build <= y;
+		if ((x > 10) && (x < 630)) y_max_build <= y;
+	end
+	if (sop & in_valid) begin	//Reset bounds on start of packet
+		x_min_red <= IMAGE_W-11'h1;
+		x_max_red <= 0;
+		y_min_red <= IMAGE_H-11'h1;
+		y_max_red <= 0;
+
+		x_min_lime <= IMAGE_W-11'h1;
+		x_max_lime <= 0;
+		y_min_lime <= IMAGE_H-11'h1;
+		y_max_lime <= 0;
+
+		x_min_green <= IMAGE_W-11'h1;
+		x_max_green <= 0;
+		y_min_green <= IMAGE_H-11'h1;
+		y_max_green <= 0;
+
+		x_min_yellow <= IMAGE_W-11'h1;
+		x_max_yellow <= 0;
+		y_min_yellow <= IMAGE_H-11'h1;
+		y_max_yellow <= 0;
+
+		x_min_pink <= IMAGE_W-11'h1;
+		x_max_pink <= 0;
+		y_min_pink <= IMAGE_H-11'h1;
+		y_max_pink <= 0;
+		
+		x_min_blue <= IMAGE_W-11'h1;
+		x_max_blue <= 0;
+		y_min_blue <= IMAGE_H-11'h1;
+		y_max_blue <= 0;
+
+		x_min_build <= IMAGE_W-11'h1;
+		x_max_build <= 0;
+		y_min_build <= IMAGE_H-11'h1;
+		y_max_build <= 0;
+	end
+
+end
+
+//Detecting middle stripe
+reg [10:0] count, max_row, min_width_stripe, x_right_stripe_row, x_right_stripe, right_mid, width_mid; 
+reg [4:0] edges, edges_row, edges_mid;
+reg edge_detect_prev, valid_row, edge_detected;
+initial begin
+	max_row = 0;
+	min_width_stripe = 640;
+	count = 0;
+	edge_detected = 0;
+	x_right_stripe_row = 0;
+	x_right_stripe = 0;
+	edge_detect_prev = 0;
+	valid_row = 0;
+	edges = 0;
+	edges_row = 0;
+end
+always @(posedge clk) begin
+	edge_detect_prev <= edge_detect;
+	if (in_valid && (x > 10) && ((x == IMAGE_W-1) || (x < 630))) begin
+		if (x == IMAGE_W-1) begin
+			if (edges_row > edges) begin
+				if (valid_row) begin
+					min_width_stripe <= max_row;
+					x_right_stripe <= x_right_stripe_row;
+				end
+				edges <= edges_row;
+			end 
+			else if (edges == edges_row) begin
+				if ((valid_row) && (max_row < min_width_stripe)) begin
+						min_width_stripe <= max_row;
+						x_right_stripe <= x_right_stripe_row;
+				end
+			end
+			valid_row <= 0;
+			max_row <= 0;
+			count <= 0;
+			x_right_stripe_row <= 0;
+			edge_detected <= 0;
+			edges_row <= 0;
+		end
+		else if (edge_detect) begin
+			if (edge_detected) begin
+				if (edge_detect_prev == 0) begin
+					if (count > max_row) begin
+						max_row <= count;
+						x_right_stripe_row <= x;
+						valid_row <= 1;
+					end
+					edges_row <= edges_row + 1;
+					count <= 0;
+				end
+				else count <= count + 1;
+			end
+			else begin
+				edge_detected <= 1;
+				edges_row <= 1;
+			end
+		end
+		else begin
+			if (edge_detected) count <= count + 1;
+		end 
+	end
+	if (eop & in_valid & packet_video) begin
+		right_mid <= x_right_stripe;
+		width_mid <= min_width_stripe;
+		edges_mid <= edges;
+		max_row <= 0;
+		min_width_stripe <= 640;
+		count <= 0;
+		edge_detected <= 0;
+		x_right_stripe_row <= 0;
+		x_right_stripe <= 0;
+		edge_detect_prev <= 0;
+		valid_row <= 0;
+		edges <= 0;
+		edges_row <= 0;
+	end 
+end
+
+//Process bounding box at the end of the frame.
+reg [3:0] msg_state;
+reg [10:0] left_red, right_red, top_red, bottom_red, width_red;
+reg [10:0] left_lime, right_lime, top_lime, bottom_lime, width_lime;
+reg [10:0] left_green, right_green, top_green, bottom_green, width_green;
+reg [10:0] left_yellow, right_yellow, top_yellow, bottom_yellow, width_yellow;
+reg [10:0] left_pink, right_pink, top_pink, bottom_pink, width_pink;
+reg [10:0] left_blue, right_blue, top_blue, bottom_blue, width_blue;
+reg [10:0] left_build, right_build, top_build, bottom_build;
+reg [9:0] width_build;
+reg [7:0] frame_count;
+always@(posedge clk) begin
+	if (eop & in_valid & packet_video) begin  //Ignore non-video packets
+		
+		//Latch edges for display overlay on next frame
+		left_red <= x_min_red - 5;
+		right_red <= x_max_red;
+		top_red <= y_min_red;
+		bottom_red <= y_max_red;
+		width_red <= x_max_red - x_min_red + 5;
+
+		left_lime <= x_min_lime - 5;
+		right_lime <= x_max_lime;
+		top_lime <= y_min_lime;
+		bottom_lime <= y_max_lime;
+		width_lime <= x_max_lime - x_min_lime + 5;
+
+		left_green <= x_min_green - 5;
+		right_green <= x_max_green;
+		top_green <= y_min_green;
+		bottom_green <= y_max_green;
+		width_green <= x_max_green - x_min_green + 5;
+
+		left_yellow <= x_min_yellow - 5;
+		right_yellow <= x_max_yellow;
+		top_yellow <= y_min_yellow;
+		bottom_yellow <= y_max_yellow;
+		width_yellow <= x_max_yellow - x_min_yellow + 5; 
+		
+		left_pink <= x_min_pink - 15;
+		right_pink <= x_max_pink;
+		top_pink <= y_min_pink;
+		bottom_pink <= y_max_pink;
+		width_pink <= x_max_pink - x_min_pink + 15;
+		
+		left_blue <= x_min_blue - 5;
+		right_blue <= x_max_blue;
+		top_blue <= y_min_blue;
+		bottom_blue <= y_max_blue;
+		width_blue <= x_max_blue - x_min_blue + 5; 
+
+		left_build <= x_min_build;
+		right_build <= x_max_build;
+		top_build <= y_min_build - 30;
+		bottom_build <= y_max_build;
+		width_build <= x_max_build - x_min_build;
+		
+		
+		//Start message writer FSM once every MSG_INTERVAL frames, if there is room in the FIFO
+		frame_count <= frame_count - 1;
+		
+		if (frame_count == 0 && msg_buf_size < MESSAGE_BUF_MAX - 3) begin
+			msg_state <= 4'b0001;
+			frame_count <= MSG_INTERVAL-1;
+		end
+	end
+	
+	//Cycle through message writer states once started
+	if (msg_state != 4'b0000) 
+		begin
+			if (msg_state == 4'b1110) msg_state <= 4'b0000;
+			else msg_state <= msg_state + 4'b0001;
+		end
+end
+
+
+
+//Generate output messages for CPU
+reg [31:0] msg_buf_in; 
+wire [31:0] msg_buf_out;
+reg msg_buf_wr;
+wire msg_buf_rd, msg_buf_flush;
+wire [7:0] msg_buf_size;
+wire msg_buf_empty;
+
+`define RED_BOX_MSG_ID "R"
+`define GREEN_BOX_MSG_ID "G"
+`define BLUE_BOX_MSG_ID "B"
+`define LIME_BOX_MSG_ID "L"
+`define PINK_BOX_MSG_ID "P"
+`define YELLOW_BOX_MSG_ID "Y"
+`define BUILD_BOX_MSG_ID "E"
+
+always@(*) begin	//Write words to FIFO as state machine advances
+	case(msg_state)
+		4'b0000: begin
+			msg_buf_in = 32'b0;
+			msg_buf_wr = 1'b0;
+		end
+		4'b0001: begin
+            msg_buf_in = `RED_BOX_MSG_ID;    //Red Ball ID 
+            msg_buf_wr = 1'b1;
+        end
+        4'b0010: begin
+            msg_buf_in = {5'b0, right_red, 5'b0, width_red};    //
+            msg_buf_wr = 1'b1;
+        end
+        4'b0011: begin
+            msg_buf_in = `GREEN_BOX_MSG_ID;    //Green Ball ID 
+            msg_buf_wr = 1'b1;
+        end
+        4'b0100: begin
+            msg_buf_in = {5'b0, right_green, 5'b0, width_green};    //
+            msg_buf_wr = 1'b1;
+        end
+        4'b0101: begin
+            msg_buf_in = `BLUE_BOX_MSG_ID;  //Blue Ball ID 
+            msg_buf_wr = 1'b1;
+        end
+        4'b0110: begin
+            msg_buf_in = {5'b0, right_blue, 5'b0, width_blue};        // 
+            msg_buf_wr = 1'b1;
+        end
+        4'b0111: begin
+            msg_buf_in = `LIME_BOX_MSG_ID;  //Lime Ball ID
+            msg_buf_wr = 1'b1;
+        end
+        4'b1000: begin
+            msg_buf_in = {5'b0, right_lime, 5'b0, width_lime};    //
+            msg_buf_wr = 1'b1;
+        end
+        4'b1001: begin 
+			msg_buf_in = `PINK_BOX_MSG_ID;      //Pink Ball ID
+            msg_buf_wr = 1'b1;
+        end
+        4'b1010: begin
+            msg_buf_in = {5'b0, right_pink, 5'b0, width_pink};    //
+            msg_buf_wr = 1'b1;
+        end
+        4'b1011: begin
+            msg_buf_in = `YELLOW_BOX_MSG_ID;    //Yellow Ball ID
+            msg_buf_wr = 1'b1;
+        end
+        4'b1100: begin
+            msg_buf_in = {5'b0, right_yellow, 5'b0, width_yellow};       //
+            msg_buf_wr = 1'b1;
+        end
+        4'b1101: begin
+            msg_buf_in = `BUILD_BOX_MSG_ID; //Building ID
+            msg_buf_wr = 1'b1;
+        end
+        4'b1110: begin
+            msg_buf_in = {width_build, right_mid, width_mid};    //
+            msg_buf_wr = 1'b1;
+        end
+    endcase
+end
+
+
+//Output message FIFO
+MSG_FIFO	MSG_FIFO_inst (
+	.clock (clk),
+	.data (msg_buf_in),
+	.rdreq (msg_buf_rd),
+	.sclr (~reset_n | msg_buf_flush),
+	.wrreq (msg_buf_wr),
+	.q (msg_buf_out),
+	.usedw (msg_buf_size),
+	.empty (msg_buf_empty)
+	);
+
+
+//Streaming registers to buffer video signal
+STREAM_REG #(.DATA_WIDTH(26)) in_reg (
+	.clk(clk),
+	.rst_n(reset_n),
+	.ready_out(sink_ready),
+	.valid_out(in_valid),
+	.data_out({red,green,blue,sop,eop}),
+	.ready_in(out_ready),
+	.valid_in(sink_valid),
+	.data_in({sink_data,sink_sop,sink_eop})
+);
+
+STREAM_REG #(.DATA_WIDTH(26)) out_reg (
+	.clk(clk),
+	.rst_n(reset_n),
+	.ready_out(out_ready),
+	.valid_out(source_valid),
+	.data_out({source_data,source_sop,source_eop}),
+	.ready_in(source_ready),
+	.valid_in(in_valid),
+	.data_in({red_out, green_out, blue_out, sop, eop})
+);
+
+/////////////////////////////////
+/// Memory-mapped port		 /////
+/////////////////////////////////
+
+// Addresses
+`define REG_STATUS    			0
+`define READ_MSG    				1
+`define READ_ID    				2
+`define REG_BBCOL					3
+
+//Status register bits
+// 31:16 - unimplemented
+// 15:8 - number of words in message buffer (read only)
+// 7:5 - unused
+// 4 - flush message buffer (write only - read as 0)
+// 3:0 - unused
+
+
+// Process write
+
+reg  [7:0]   reg_status;
+reg	[23:0]	bb_col;
+
+always @ (posedge clk)
+begin
+	if (~reset_n)
+	begin
+		reg_status <= 8'b0;
+		bb_col <= BB_COL_DEFAULT;
+	end
+	else begin
+		if(s_chipselect & s_write) begin
+		   if      (s_address == `REG_STATUS)	reg_status <= s_writedata[7:0];
+		   if      (s_address == `REG_BBCOL)	bb_col <= s_writedata[23:0];
+		end
+	end
+end
+
+//Flush the message buffer if 1 is written to status register bit 4
+assign msg_buf_flush = (s_chipselect & s_write & (s_address == `REG_STATUS) & s_writedata[4]);
+
+
+// Process reads
+reg read_d; //Store the read signal for correct updating of the message buffer
+
+// Copy the requested word to the output port when there is a read.
+always @ (posedge clk)
+begin
+   if (~reset_n) begin
+	   s_readdata <= {32'b0};
+		read_d <= 1'b0;
+	end
+	
+	else if (s_chipselect & s_read) begin
+		if   (s_address == `REG_STATUS) s_readdata <= {16'b0,msg_buf_size,reg_status};
+		if   (s_address == `READ_MSG) s_readdata <= {msg_buf_out};
+		if   (s_address == `READ_ID) s_readdata <= 32'h1234EEE2;
+		if   (s_address == `REG_BBCOL) s_readdata <= {8'h0, bb_col};
+	end
+	
+	read_d <= s_read;
+end
+
+//Fetch next word from message buffer after read from READ_MSG
+assign msg_buf_rd = s_chipselect & s_read & ~read_d & ~msg_buf_empty & (s_address == `READ_MSG);
+						
+endmodule
