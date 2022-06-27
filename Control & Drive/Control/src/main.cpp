@@ -5,42 +5,479 @@
 #include <stdint.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
-#include <NTPClient.h>
-#include <math.h>
-#define RXP1 16
-#define TXP1 17
-
-bool Vision;
-int size;
-int counter=0;
-int id_colour;
-int x_object;
-int y_object;
-double x_object_real;
-double y_object_real;
-int theta=30;
-int x_rover=10;
-int y_rover=10;
-String colour;
-String type;
-double pi=3.141592654;
+#include "command.h"
+#include "controller.h"
+#include "sensor.h"
 
 
-void setup() {
- Serial1.begin(115200,SERIAL_8N1,RXP1,TXP1);
- Serial.begin(115200);
+#define MOTOR_A_IN1 15
+#define MOTOR_A_IN2 13
+#define MOTOR_A_ENA 2
+
+#define MOTOR_B_IN1 14
+#define MOTOR_B_IN2 12
+#define MOTOR_B_ENA 4
+
+sensor Mysensor;
+controller Mycontroller;
+RunningMedian offsetSamples = RunningMedian(30);
+RunningMedian gyroSamples = RunningMedian(5);
+RunningMedian lastError = RunningMedian(5);
+bool distance_reached;
+//needed for autonomous
+int size_collide;
+int iteration_counter;
+bool close_to_edge=0;
+bool obstacle=0;
+std::vector<int> size_of_edges;
+
+// Interrupts ===================================================
+    volatile int interruptCounter;
+ 
+    hw_timer_t * timer = NULL;
+    portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+ 
+    void IRAM_ATTR onTimer() {
+        portENTER_CRITICAL_ISR(&timerMux);
+        interruptCounter++;
+        portEXIT_CRITICAL_ISR(&timerMux);
+    }
 
 
+PID turnPID(&Mycontroller.current_angle, &Mycontroller.angleCorrection, &Mycontroller.target_angle, Mycontroller.Kp_turn, Mycontroller.Ki_turn, Mycontroller.Kd_turn, DIRECT);
+PID drivePID(&Mycontroller.current_angle, &Mycontroller.angleCorrection, &Mycontroller.target_angle, Mycontroller.Kp_drive, Mycontroller.Ki_drive, Mycontroller.Kd_drive, DIRECT);
+
+
+
+int count=0;
+//Variables used for Vision
+bool Vision=false;    // Is true when a full message has been sent (colour,type, x and y)
+int counter=0;        //to know what is being sent
+int id_colour;        //before converting using the ASCII table to get the character we get this number
+int x_object;         //x of the obstace in regards to the rover
+int y_object;         //y of the obstacle in regards to the rover
+int x_object_real;    //real x of the obstacle on the map
+int y_object_real;    //real y of the obstacle on the map          
+String colour;        //colour of obstacle if its an alien
+String type;          //type of the obstacle
+int size_of_object;   // width of the ball or the building
+
+//Receive from Command. Send to Drive
+int angle_from_user;
+int distance_from_user;
+
+//Receive from Energy. Send to Command
+float percentage;
+
+//Receive from Vision. Send to Command
+int xcoordinate_alien;
+int ycoordinate_alien;
+// String colour;
+// String type_of_obstacle;
+
+//Receive from Drive. Send to Command
+int xcoordinate_rover=0;
+int ycoordinate_rover=0;
+int angle_of_rover=30;
+
+//Receive from Command.
+bool backtobase; 
+bool automate;
+
+//Receive from Radar. Send to Command.
+bool found;
+
+TaskHandle_t Task2;
+TaskHandle_t Task1;
+TaskHandle_t Task3;
+TaskHandle_t Task4;
+TaskHandle_t Task5;
+
+
+
+command Mycommand;
+
+
+void Task2code(void* parameter);
+void Task1code(void* parameter);
+void Task3code(void* parameter);
+void Task4code(void* parameter);
+void Task5code(void* parameter);
+
+
+void setup(){
+  Serial.begin(115200);
+  Mycommand.initwiFi();
+  xTaskCreatePinnedToCore(Task2code,"Task2",10000,NULL,1,&Task2,tskNO_AFFINITY);
+  delay(1);
+  //Drive setup
+      //Timer setup
+    Mycontroller.MOTOR_DELTAMAX = Mycontroller.MOTOR_DELTAMAX_TURN;
+    Mysensor.setup();
+  // PID ===================================================
+
+    timer = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer, &onTimer, true);
+    timerAlarmWrite(timer, 20000, true);
+    timerAlarmEnable(timer);
+
+    //IO Setup
+    pinMode(MOTOR_A_IN1, OUTPUT);
+    pinMode(MOTOR_A_IN2, OUTPUT);
+    pinMode(MOTOR_A_ENA, OUTPUT);
+
+    pinMode(MOTOR_B_IN1, OUTPUT);
+    pinMode(MOTOR_B_IN2, OUTPUT);
+    pinMode(MOTOR_B_ENA, OUTPUT);
+
+    pinMode(12, OUTPUT);
+    Mycontroller.motor_off();
+    //Gyro and Serial Port initialization
+    Serial.begin(115200);
+    while (!Serial)
+    delay(10);
+    Serial.println("Adafruit MPU6050 test!");
+    if (!Mycontroller.mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {delay(10);}
+    }
+    Serial.println("MPU6050 Found!");
+
+
+      //Gyroscope setup
+    Mycontroller.mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+    Mycontroller.mpu.setGyroRange(MPU6050_RANGE_2000_DEG);
+    Mycontroller.mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+    Mycontroller.gyro_offset = Mycontroller.find_gyro_offset();
+
+    //IO Setup
+
+    Mycontroller.motor_off();
+    Serial.println("Motors : ok");
+    //PID setup
+    turnPID.SetMode(AUTOMATIC);
+    drivePID.SetMode(AUTOMATIC);
+
+    Serial.println("Ending Setup");
+    xTaskCreatePinnedToCore(Task1code,"Task1",100000,NULL,3,&Task1,tskNO_AFFINITY);
+    delay(1);
+    xTaskCreatePinnedToCore(Task3code,"Task3",10000,NULL,2,&Task3,tskNO_AFFINITY);
+    delay(1);
+    xTaskCreatePinnedToCore(Task4code,"Task4",10000,NULL,0,&Task4,tskNO_AFFINITY);
+    delay(1);
+    xTaskCreatePinnedToCore(Task5code,"Task5",10000,NULL,0,&Task5,tskNO_AFFINITY);
+    delay(1);
+
+    Serial.println("Ending Setup");
+}
+
+void Task1code (void* parameter){
+    Serial.print("Task1 running on core : ");
+    Serial.println(xPortGetCoreID());
+    for (;;){
+    //Drive code 
+  //Drive code 
+  if(Mycontroller.task_finished == 0){
+  //Calculate current angle ================================
+  if (interruptCounter > 0) {
+    portENTER_CRITICAL(&timerMux);
+    interruptCounter--;
+    portEXIT_CRITICAL(&timerMux);
+    sensors_event_t a, g, temp;
+    Mycontroller.mpu.getEvent(&a, &g, &temp);
+    Mycontroller.current_angular_velocity = g.gyro.z - Mycontroller.gyro_offset;
+    gyroSamples.add(Mycontroller.current_angular_velocity);
+    Mycontroller.median_angular_velocity = gyroSamples.getMedian();
+    Mycontroller.current_angle -= (Mycontroller.median_angular_velocity * 0.02)*180/Mycontroller.pi;
+    Mycontroller.user_angle = Mycontroller.angle_PID_to_user(Mycontroller.current_angle);
+    Mycontroller.countLoops++;
+    Mycontroller.error = abs(Mycontroller.target_angle - Mycontroller.current_angle);
+    lastError.add(Mycontroller.error);
+    Mycontroller.medianError = lastError.getMedian();
+    if (Mycommand.Direction == "drive"){
+      Mysensor.motion_detction();
+      Mysensor.update_values(Mycontroller.angle_PID_to_user(Mycontroller.current_angle));
+      //Serial.println("  Distance: " + String((Mysensor.total_y)));
+      //Serial.println(abs(Mycontroller.distance_y_covered-Mycommand.distance_from_user));
+      if (abs(Mycontroller.distance_y_covered-Mycommand.distance_from_user)<=2){
+        distance_reached=true;
+      }
+     }
+  }
   
-  // put your setup code here, to run once:
+  
+  if(Mycontroller.countLoops == 4){
+    if(Mycontroller.turn == 1){
+          if(Mycontroller.limit > Mycontroller.MOTOR_DELTAMAX_TURN){
+            Mycontroller.limit = Mycontroller.MOTOR_DELTAMAX_TURN;
+            turnPID.SetOutputLimits(-Mycontroller.limit, Mycontroller.limit);
+          }else{
+            Mycontroller.limit += 0.25;
+            turnPID.SetOutputLimits(-Mycontroller.limit, Mycontroller.limit);
+          }  
+          Serial.println("Median Angular Velocity: " + String(Mycontroller.median_angular_velocity,3) + " Current Angle: " + String(Mycontroller.current_angle,3) + " Steer Correction: " + String(Mycontroller.angleCorrection, 3));
+          turnPID.Compute();
+          Mycontroller.motor_forward(Mycontroller.angleCorrection); //Correction negative - turn left  
+          if(Mycontroller.medianError >= 0.5 && Mycontroller.medianError < 7){
+            turnPID.SetOutputLimits(-40, 40);
+            if(Mycontroller.angleCorrection > 0)   {Mycontroller.angleCorrection = map(Mycontroller.angleCorrection, 0, 40, 37, 40);}
+            else                      {Mycontroller.angleCorrection = map(Mycontroller.angleCorrection, -40, 0, -40, -37);}
+          } 
+          if(Mycontroller.medianError <= 3){
+            Mycontroller.task_finished = 1;
+            Mycommand.Direction="";
+            Mycontroller.motor_off();
+            Serial.println("Turn Completed");
+          }  
+          Mycontroller.countLoops = 0;
+          
+    }
+    
+    else if(Mycontroller.drive == 1){ 
+  
+       if(Mycontroller.MOTOR_NOMINAL < Mycontroller.MOTOR_NOMINAL_DRIVE){
+        Mycontroller.MOTOR_NOMINAL += 0.5;
+        }else{
+        Mycontroller.MOTOR_NOMINAL = Mycontroller.MOTOR_NOMINAL_DRIVE;
+        }  
+        if(Mycontroller.limit > Mycontroller.MOTOR_DELTAMAX_DRIVE){
+          Mycontroller.limit = Mycontroller.MOTOR_DELTAMAX_DRIVE;
+          drivePID.SetOutputLimits(-Mycontroller.limit, Mycontroller.limit);
+        }else{
+          Mycontroller.limit += 1.5;
+          drivePID.SetOutputLimits(-Mycontroller.limit,Mycontroller.limit);
+        }       
+        Serial.println("Median Angular Velocity: " + String(Mycontroller.median_angular_velocity,3) + " Current Angle: " + String(Mycontroller.current_angle,3) + " Steer Correction: " + String(Mycontroller.angleCorrection, 3));
+        drivePID.Compute();
+        Mycontroller.motor_forward(Mycontroller.angleCorrection); //Correction positive - turn left
+        Mycontroller.countLoops = 0;
+        Mycontroller.distance_y_covered= Mysensor.total_y-Mycontroller.old_distance_y;
+      
+      if(distance_reached==true){
+            Mycontroller.motor_off();
+            Serial.println("Distance achieved");
+            Mycontroller.task_finished = 1;
+            Mycommand.Direction="";
+            distance_reached=false;
+            Mycontroller.old_distance_y=Mysensor.total_y;
+            Mycontroller.distance_y_covered=0;
+        }
+    }
+
+    else if(Mycontroller.off == 1){
+        Mycontroller.motor_off();
+        Mycontroller.task_finished = 1;
+        Serial.println("Off Completed");
+    }
+    
+  }  
+}
+else{
+
+    if( Mycommand.Direction== "drive"){
+      Mycontroller.target_angle = Mycontroller.current_angle;
+      Mycontroller.MOTOR_NOMINAL = 0;
+      Mycontroller.MOTOR_DELTAMAX = Mycontroller.MOTOR_DELTAMAX_DRIVE;
+      Mycontroller.drive = 1;
+      Mycontroller.turn = 0;
+      Mycontroller.off = 0;
+      Mycontroller.limit = 0;
+      Mycontroller.angleCorrection = 0;
+      Mycontroller.task_finished = 0;
+    }
+    else if(Mycommand.Direction == "turn"){
+      Mycontroller.target_angle=Mycontroller.current_angle+Mycommand.angle_from_user;
+      Mycontroller.MOTOR_NOMINAL = 0;
+      Mycontroller.MOTOR_DELTAMAX = Mycontroller.MOTOR_DELTAMAX_TURN;
+      Mycontroller.limit = 0;
+      Mycontroller.drive = 0;
+      Mycontroller.turn = 1;
+      Mycontroller.off = 0;
+      Mycontroller.angleCorrection = 0;
+      Mycontroller.task_finished = 0;
+    }
+    else if(Mycommand.Direction == "off"){
+      Mycontroller.MOTOR_NOMINAL = 0;
+      Mycontroller.MOTOR_DELTAMAX = 0;
+      Mycontroller.drive = 0;
+      Mycontroller.turn = 0;
+      Mycontroller.off = 1;
+      Mycontroller.limit = 0;
+      Mycontroller.angleCorrection = 0;
+      Mycontroller.task_finished = 1;
+    }
+  }
+
+  if (Mycommand.automate == 1){
+        if (Mycommand.Pathfinding==0){
+            //if we are at the edge
+            if (close_to_edge==1 && Mycontroller.task_finished==1){
+                //before we turn we check if we have to execute the next one or we stop automation
+                if (Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=60 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=120){
+                  if (size_of_edges[1]<=30){
+                    Mycommand.automate=0;
+                    Mycommand.Direction="off";
+                    Mycommand.autonomous(NULL,NULL,NULL,NULL,NULL,1);
+        
+                  }
+                else if(Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=240 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=300){
+                  if (size_of_edges[3]<=30){
+                    Mycommand.automate=0;
+                    Mycommand.Direction="off";
+                    Mycommand.autonomous(NULL,NULL,NULL,NULL,NULL,1);
+
+                  }
+                }
+                }
+                if (Mycommand.automate ==1 ){
+                Mycommand.Direction="turn";
+                Mycommand.angle_from_user=90;
+                iteration_counter+=1;
+                close_to_edge=0;
+                //if we are at 4th edge so 1st iteration of the rectangle (edge case)
+                if(iteration_counter==4){
+                    size_of_edges[0] -= 30;
+                    size_of_edges[1] -= 60;
+                    size_of_edges[2] -= 60;
+                    size_of_edges[3] -= 60;
+                } 
+                //if we are at 8th, 12th ... edge meaning iteration>1 
+                else if (iteration_counter%4==0){
+                    size_of_edges[0] -= 60;
+                    size_of_edges[1] -= 60;
+                    size_of_edges[2] -= 60;
+                    size_of_edges[3] -= 60;
+                }
+            }
+
+            //if no object in front and i can't see an object or the rover will not collide with it go forward but check if we are close to the edge
+            if (Mycommand.automate==1){
+  
+            if (Mycontroller.task_finished==1 && ((x_object==0 && y_object==0) || (x_object>-12 || x_object<12))){
+                //We have to check for buildings cz coordinates is the middle (i think IK what to do)
+                if (Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=60 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=120){
+                    if (size_of_edges[0]-Mysensor.y<=50){
+                        close_to_edge=1;
+                        Mycommand.distance_from_user=size_of_edges[0]-Mysensor.y;
+                        Mycommand.Direction="drive";
+                    }
+                    else {
+                        Mycommand.Direction="drive";
+                        Mycommand.distance_from_user=50;
+                    }
+                }
+                else if (Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=150 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=210){
+                    if (Mysensor.x-size_of_edges[3]-Mysensor.y<=50){
+                        close_to_edge=1;
+                        Mycommand.distance_from_user=Mysensor.x-size_of_edges[3]-Mysensor.y;
+                        Mycommand.Direction="drive";
+                    }
+                    else {
+                        Mycommand.Direction="drive";
+                        Mycommand.distance_from_user=50;
+                    }
+                }
+                else if (Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=-30 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=30){
+                    if(size_of_edges[1]-Mysensor.x<=50){
+                        close_to_edge=1;
+                        Mycommand.distance_from_user=size_of_edges[1]-Mysensor.x;
+                        Mycommand.Direction="drive";
+                    }
+                    else{
+                    Mycommand.Direction="drive";
+                    Mycommand.distance_from_user=50;
+                    }
+                }
+                else if (Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=240 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=300){
+                    if (Mysensor.y-size_of_edges[2]<=50){
+                        close_to_edge=1;
+                        Mycommand.distance_from_user=Mysensor.y-size_of_edges[2];
+                        Mycommand.Direction="drive";
+                    }
+                    else{
+                        Mycommand.Direction="drive";
+                        Mycommand.distance_from_user=50;
+                    }
+                }
+            }
+            //if we detected the obstacle and stopped we have to calculate the distance to go more
+            if ((y_object != 0) && obstacle==1){
+                    Mycommand.distance_from_user=x_object-20;
+                    Mycommand.Direction="drive";
+            }
+            //we are waiting in front of the obstacle to send to Command
+            else if ((y_object<=22 && y_object>=18) && Mycontroller.task_finished==1){
+                if ((Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=150 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=210)){
+                    Mycommand.autonomous(Mysensor.x,Mysensor.y,Mysensor.x-30-size_collide ,Mysensor.y,"","" );
+                }
+                else if (Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=240 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=300){
+                    Mycommand.autonomous(Mysensor.x,Mysensor.y,Mysensor.x ,Mysensor.y-30-size_collide,"",""  );
+                }
+                else if(Mycontroller.angle_PID_to_user(Mycontroller.current_angle)>=-30 && Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=30){
+                    Mycommand.autonomous(Mysensor.x,Mysensor.y,Mysensor.x+30+size_collide ,Mysensor.y,"","" );
+                }
+                else{
+                    Mycommand.autonomous(Mysensor.x,Mysensor.y,Mysensor.x ,Mysensor.y+30+size_collide,"",""  );
+                }
+                Mycommand.Pathfinding=1;
+                obstacle=0;
+            }
+            //Add the code to receive from Timur and make Command execute (not sure it needs code)
+            //Timur has to let me know when hes done to continue to reset obstacle as well
+
+            //Here add the part about the the radius to see if we are going to hit it
+            else if ((x_object-(size_of_object/2) <=12 || x_object+(size_of_object/2)>=-12)){
+                Mycommand.Direction="off";
+                Mycontroller.task_finished=1;
+                obstacle=1;
+                size_collide=size_of_object;
+
+
+
+            }
+            }
+            }
+        }
+  }
+
+
+
+
+
+ 
+   vTaskDelay(1);     
+
+}
 }
 
 
-void loop() {
-  Vision=false;
-  Serial.println("Not in the loop");
+void Task2code(void*  parameter){
+  Serial.print("Task2 running on core : ");
+  Serial.println(xPortGetCoreID());
+  for(; ;){
+    Mycommand.reconnect();
+    Mycommand.http_receive_Request(Mycommand.LinkGet,"/data/commands");
+    vTaskDelay(1);
+
+  }
+}
+
+void Task3code (void* parameter){
+    Serial.print("Task3 running on core : ");
+    Serial.println(xPortGetCoreID());
+    for (;;){
+      Mycommand.reconnect();
+      Mycommand.Sensor_to_server(Mysensor.x,Mysensor.y,Mycontroller.angle_PID_to_user(Mycontroller.current_angle),Mycontroller.task_finished);
+      vTaskDelay(1);
+    }
+}
+
+void Task4code (void* prameter){
+  Serial.print("Task4 running on core : ");
+  Serial.println(xPortGetCoreID());
+  for(;;){
+      Vision=false;
   if (Serial1.available()){
-    Serial.println("In the loop");
 
     if (counter==0){
     
@@ -48,32 +485,32 @@ void loop() {
     
       switch(id_colour){
         case 66: 
-          colour="Blue";
-          type="Alien";
+          colour="blue";
+          type="alien";
           break;
         case 69: //Building
           colour="";
-          type="Building";
+          type="building";
           break;
         case 71:
-          colour="Green";
-          type="Alien";
+          colour="green";
+          type="alien";
           break;
         case 76:
-          colour="Lime";
-          type="Alien";
+          colour="lime";
+          type="alien";
           break;
         case 80:
-          colour="Pink";
-          type="Alien";
+          colour="pink";
+          type="alien";
           break;
         case 82:
-          colour="Red";
-          type="Alien";
+          colour="red";
+          type="alien";
           break;
         case 89:
-          colour="Yellow";
-          type="Alien";
+          colour="yellow";
+          type="alien";
           break;
         default:
           counter=-1;
@@ -88,49 +525,76 @@ void loop() {
       if (x_object>=128){
         x_object -= 256;
       }
-      
       counter = 2;
-       Serial.print("x coordinate is: ");
-       Serial.println(x_object);
-    }
+      Serial.print("x coordinate is: ");
+      Serial.println(x_object);
+    }//y_object_real
     else if (counter==2){
+      int angle;
+      int mag;
+      int phi;
+
       y_object=Serial1.read();
-      //x_object_real= sqrt((pow(x_object,2))+(pow(y_object,2)))*cos(theta-atan(x_object/y_object)*(180/pi))+x_rover;
-      //y_object_real= sqrt((pow(x_object,2))+(pow(y_object,2)))*sin(theta-atan(x_object/y_object)*(180/pi))+y_rover;
-      if(0<=theta<=90){
-      x_object_real=x_object*cos(90-theta)-y_object*sin(90-theta);
-      y_object_real=x_object*sin(90-theta)+y_object*cos(90-theta);
-      }
-      else if (90<theta<=180){
-      x_object_real=x_object*cos(90+theta)-y_object*sin(90+theta)+x_rover;
-      y_object_real=x_object*sin(90+theta)+y_object*cos(90+theta)+y_rover;
-      }
-      else if (180<theta<=270){
-       x_object_real=x_object*cos(180-theta)-y_object*sin(180-theta)+x_rover;
-      y_object_real=x_object*sin(180-theta)+y_object*cos(180-theta)+y_rover;
-      }
-      else if (270<theta<=360){
-      x_object_real=x_object*cos(180+theta)-y_object*sin(180+theta)+x_rover;
-      y_object_real=x_object*sin(180+theta)+y_object*cos(180+theta)+y_rover;
-      }
+      mag=sqrt(x_object*x_object+y_object*y_object);
+      phi=atan(x_object/y_object)*180/3.14159265359;
 
+      if(0<=Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=90){
+        if(y_object<0){
+          if(x_object<0)
+            phi-=180;
+          else
+            phi*=-1;
+        }
+        angle=Mycontroller.angle_PID_to_user(Mycontroller.current_angle)-phi;
+      }
+      else if(90<Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=180){
+        if(y_object<0){
+          if(x_object<0)
+            phi-=180;
+          else
+            phi*=-1;
+        }
+        angle=Mycontroller.angle_PID_to_user(Mycontroller.current_angle)-phi;
+      }
+      else if(180<Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<=270){
+        if(y_object<0){
+          if(x_object<0)
+            phi=180-phi;
+          else
+            phi=-(180+phi);
+        }
+        angle=Mycontroller.angle_PID_to_user(Mycontroller.current_angle)+phi;
+      }
+      else if(270<Mycontroller.angle_PID_to_user(Mycontroller.current_angle)<360){
+        if(y_object<0){
+          if(x_object<0)
+            phi=180-phi;
+          else
+            phi=-(180+phi);
+        }
+        angle=Mycontroller.angle_PID_to_user(Mycontroller.current_angle)+phi;
+      }
+      x_object_real=mag*cos(angle*3.14159265359/180)+Mysensor.x;
+      y_object_real=mag*sin(angle*3.14159265359/180)+Mysensor.y;
 
-     
-
-      
       counter=3;
       Serial.print("y coordinate is: ");
       Serial.println(y_object);
 
-      Serial.println("the real x coordinate is :");
+      Serial.print(" real coordinate x : ");
       Serial.println(x_object_real);
-      Serial.println("the real y coordinate is :");
+
+
+      Serial.print(" real coordinate y : ");
       Serial.println(y_object_real);
+
+      
     }
     else if (counter==3){
-      size=Serial1.read();
+      size_of_object=Serial1.read();
       Vision=true; 
       counter=0;
+      //Serial.println(size_of_object);
       // Serial.println("Nothing is sent : ");
       // Serial.println(Serial.read());
 
@@ -138,9 +602,37 @@ void loop() {
     else{
       counter=0;
     }
+
   
   }
   else{
     counter=0;
   }
+  vTaskDelay(1);
+    
+  }
+}
+
+void Task5code(void*  parameter){
+  Serial.print("Task5 running on core : ");
+  Serial.println(xPortGetCoreID());
+  for(; ;){
+    Mycommand.reconnect();
+   if (Vision){
+    Mycommand.FPGA_to_server(x_object_real,y_object_real,type,colour,size_of_object);
+    Vision=false;
+   }
+   //Serial.println("INSIDETASK2");
+  }
+}
+
+
+
+
+
+
+
+
+void loop (){
+//
 }
