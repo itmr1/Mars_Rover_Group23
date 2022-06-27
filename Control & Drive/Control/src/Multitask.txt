@@ -1,0 +1,255 @@
+#include <Arduino.h>
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <stdint.h>
+#include <WiFiClient.h>
+#include <HTTPClient.h>
+#include <NTPClient.h>
+#include "command.h"
+#define RXP1 16
+#define TXP1 17
+
+int count=0;
+//Variables used for Vision
+bool Vision=false;    // Is true when a full message has been sent (colour,type, x and y)
+int counter=0;        //to know what is being sent
+int id_colour;        //before converting using the ASCII table to get the character we get this number
+int x_object;         //x of the obstace in regards to the rover
+int y_object;         //y of the obstacle in regards to the rover
+int x_object_real;    //real x of the obstacle on the map
+int y_object_real;    //real y of the obstacle on the map          
+String colour;        //colour of obstacle if its an alien
+String type;          //type of the obstacle
+int size_of_object;   // width of the ball or the building
+
+//Receive from Command. Send to Drive
+int angle_from_user;
+int distance_from_user;
+
+//Receive from Energy. Send to Command
+float percentage;
+
+//Receive from Vision. Send to Command
+int xcoordinate_alien;
+int ycoordinate_alien;
+// String colour;
+// String type_of_obstacle;
+
+//Receive from Drive. Send to Command
+int xcoordinate_rover=0;
+int ycoordinate_rover=0;
+int angle_of_rover=30;
+
+//Receive from Command.
+bool backtobase; 
+bool automate;
+
+//Receive from Radar. Send to Command.
+bool found;
+
+TaskHandle_t Task1;
+TaskHandle_t Task2;
+
+
+command Mycommand;
+
+void Task1code(void* parameter);
+void Task2code(void* parameter);
+
+
+void setup(){
+  Serial.begin(115200);
+  Serial1.begin(115200,SERIAL_8N1,RXP1,TXP1);
+  Mycommand.initwiFi();
+  xTaskCreatePinnedToCore(Task1code,"Task1",1000,NULL,1,&Task1,tskNO_AFFINITY);
+  Serial.println("HERE1");
+  delay(1);
+  xTaskCreatePinnedToCore(Task2code,"Task2",100000,NULL,1,&Task2,tskNO_AFFINITY);
+  Serial.println("HERE2");
+  delay(1);
+}
+
+
+void Task1code(void* parameter){
+  Serial.print("Task1 running on core : ");
+  Serial.println(xPortGetCoreID());
+  for ( ;; ){
+  Vision=false;
+  if (Serial1.available()){
+
+    if (counter==0){
+    
+      id_colour=Serial1.read();
+    
+      switch(id_colour){
+        case 66: 
+          colour="blue";
+          type="alien";
+          break;
+        case 69: //Building
+          colour="";
+          type="building";
+          break;
+        case 71:
+          colour="green";
+          type="alien";
+          break;
+        case 76:
+          colour="lime";
+          type="alien";
+          break;
+        case 80:
+          colour="pink";
+          type="alien";
+          break;
+        case 82:
+          colour="red";
+          type="alien";
+          break;
+        case 89:
+          colour="yellow";
+          type="alien";
+          break;
+        default:
+          counter=-1;
+    
+      }
+      counter += 1;
+      Serial.println(colour);
+      Serial.println(type);
+    }
+    else if (counter==1){
+      x_object=Serial1.read();
+      if (x_object>=128){
+        x_object -= 256;
+      }
+      counter = 2;
+      Serial.print("x coordinate is: ");
+      Serial.println(x_object);
+    }//y_object_real
+    else if (counter==2){
+      int angle;
+      int mag;
+      int phi;
+
+      y_object=Serial1.read();
+      mag=sqrt(x_object*x_object+y_object*y_object);
+      phi=atan(x_object/y_object)*180/3.14159265359;
+
+      if(0<=angle_of_rover<=90){
+        if(y_object<0){
+          if(x_object<0)
+            phi-=180;
+          else
+            phi*=-1;
+        }
+        angle=angle_of_rover-phi;
+      }
+      else if(90<angle_of_rover<=180){
+        if(y_object<0){
+          if(x_object<0)
+            phi-=180;
+          else
+            phi*=-1;
+        }
+        angle=angle_of_rover-phi;
+      }
+      else if(180<angle_of_rover<=270){
+        if(y_object<0){
+          if(x_object<0)
+            phi=180-phi;
+          else
+            phi=-(180+phi);
+        }
+        angle=angle_of_rover+phi;
+      }
+      else if(270<angle_of_rover<360){
+        if(y_object<0){
+          if(x_object<0)
+            phi=180-phi;
+          else
+            phi=-(180+phi);
+        }
+        angle=angle_of_rover+phi;
+      }
+      x_object_real=mag*cos(angle*3.14159265359/180)+xcoordinate_rover;
+      y_object_real=mag*sin(angle*3.14159265359/180)+ycoordinate_rover;
+
+      counter=3;
+      Serial.print("y coordinate is: ");
+      Serial.println(y_object);
+
+      Serial.print(" real coordinate x : ");
+      Serial.println(x_object_real);
+
+
+      Serial.print(" real coordinate y : ");
+      Serial.println(y_object_real);
+
+      
+    }
+    else if (counter==3){
+      size_of_object=Serial1.read();
+      Vision=true; 
+      counter=0;
+      //Serial.println(size_of_object);
+      // Serial.println("Nothing is sent : ");
+      // Serial.println(Serial.read());
+
+    }
+    else{
+      counter=0;
+    }
+
+  
+  }
+  else{
+    counter=0;
+  }
+  delay(1);
+ }
+
+}
+
+void Task2code(void*  parameter){
+  Serial.print("Task2 running on core : ");
+  Serial.println(xPortGetCoreID());
+  for(; ;){
+    Mycommand.reconnect();
+   if (Vision){
+    Mycommand.FPGA_to_server(x_object_real,y_object_real,type,colour,size_of_object);
+    Vision=false;
+   }
+   //Serial.println("INSIDETASK2");
+  }
+}
+
+
+
+
+void loop (){
+  // Serial.print("Task2 running on core : ");
+  // Serial.println(xPortGetCoreID());
+  // for(; ;){
+  //   Mycommand.reconnect();
+  //  if (Vision){
+  //   Mycommand.FPGA_to_server(x_object_real,y_object_real,type,colour,size_of_object);
+  //   Serial.println("It's trying you need to wait for timur");
+  //  }
+  //  delay(1);
+  // }
+
+  // Serial.print("Count Value: ");
+  // Serial.println(count++);
+  // delay(1000);
+
+  // Radar_to_server();
+  // Mycommand.Energy_to_server();
+  // delay(1000);
+  // FPGA_to_server();
+  // Sensor_to_server();
+  
+  // loop runs on core 1 so instead of task in core 1 we could put it in the loop
+}

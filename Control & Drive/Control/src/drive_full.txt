@@ -1,0 +1,225 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <PID_v1.h>
+#include <RunningMedian.h>
+#include "sensor.h"
+#include "controller.h"
+
+#define MOTOR_A_IN1 15
+#define MOTOR_A_IN2 13
+#define MOTOR_A_ENA 2
+
+#define MOTOR_B_IN1 14
+#define MOTOR_B_IN2 12
+#define MOTOR_B_ENA 4
+
+
+sensor Mysensor;
+controller Mycontroller;
+RunningMedian offsetSamples = RunningMedian(30);
+RunningMedian gyroSamples = RunningMedian(5);
+RunningMedian lastError = RunningMedian(5);
+String Direction="drive";
+int angle;
+int distance;
+bool distance_reached;
+
+// Interrupts ===================================================
+    volatile int interruptCounter;
+ 
+    hw_timer_t * timer = NULL;
+    portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+ 
+    void IRAM_ATTR onTimer() {
+        portENTER_CRITICAL_ISR(&timerMux);
+        interruptCounter++;
+        portEXIT_CRITICAL_ISR(&timerMux);
+    }
+
+
+PID turnPID(&Mycontroller.current_angle, &Mycontroller.angleCorrection, &Mycontroller.target_angle, Mycontroller.Kp_turn, Mycontroller.Ki_turn, Mycontroller.Kd_turn, DIRECT);
+PID drivePID(&Mycontroller.current_angle, &Mycontroller.angleCorrection, &Mycontroller.target_angle, Mycontroller.Kp_drive, Mycontroller.Ki_drive, Mycontroller.Kd_drive, DIRECT);
+
+  void setup() {
+    //Timer setup
+    Mycontroller.MOTOR_DELTAMAX = Mycontroller.MOTOR_DELTAMAX_TURN;
+    Mysensor.setup();
+  // PID ===================================================
+
+    timer = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer, &onTimer, true);
+    timerAlarmWrite(timer, 20000, true);
+    timerAlarmEnable(timer);
+
+    //IO Setup
+    pinMode(MOTOR_A_IN1, OUTPUT);
+    pinMode(MOTOR_A_IN2, OUTPUT);
+    pinMode(MOTOR_A_ENA, OUTPUT);
+
+    pinMode(MOTOR_B_IN1, OUTPUT);
+    pinMode(MOTOR_B_IN2, OUTPUT);
+    pinMode(MOTOR_B_ENA, OUTPUT);
+
+    pinMode(12, OUTPUT);
+    Mycontroller.motor_off();
+    //Gyro and Serial Port initialization
+    Serial.begin(115200);
+    while (!Serial)
+    delay(10);
+    Serial.println("Adafruit MPU6050 test!");
+    if (!Mycontroller.mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {delay(10);}
+    }
+    Serial.println("MPU6050 Found!");
+
+
+      //Gyroscope setup
+    Mycontroller.mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+    Mycontroller.mpu.setGyroRange(MPU6050_RANGE_2000_DEG);
+    Mycontroller.mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+    Mycontroller.gyro_offset = Mycontroller.find_gyro_offset();
+
+    //IO Setup
+
+      Mycontroller.motor_off();
+      Serial.println("Motors : ok");
+    //PID setup
+    turnPID.SetMode(AUTOMATIC);
+    drivePID.SetMode(AUTOMATIC);
+
+    Serial.println("Ending Setup");
+}
+
+
+
+void loop() {
+  
+if(Mycontroller.task_finished == 0){
+  //Calculate current angle ================================
+  if (interruptCounter > 0) {
+    portENTER_CRITICAL(&timerMux);
+    interruptCounter--;
+    portEXIT_CRITICAL(&timerMux);
+    sensors_event_t a, g, temp;
+    Mycontroller.mpu.getEvent(&a, &g, &temp);
+    Mycontroller.current_angular_velocity = g.gyro.z - Mycontroller.gyro_offset;
+    gyroSamples.add(Mycontroller.current_angular_velocity);
+    Mycontroller.median_angular_velocity = gyroSamples.getMedian();
+    Mycontroller.current_angle -= (Mycontroller.median_angular_velocity * 0.02)*180/Mycontroller.pi;
+    Mycontroller.user_angle = Mycontroller.angle_PID_to_user(Mycontroller.current_angle);
+    Mycontroller.countLoops++;
+    Mycontroller.error = abs(Mycontroller.target_angle - Mycontroller.current_angle);
+    lastError.add(Mycontroller.error);
+    Mycontroller.medianError = lastError.getMedian();
+    if (Direction == "drive"){
+      Mysensor.motion_detction();
+      Serial.println("  Distance: " + String((Mysensor.total_y)));
+      if (abs(Mycontroller.distance_y_covered-Mycontroller.desired_distance)<2){
+        distance_reached=true;
+      }
+     }
+  }
+  
+  
+  if(Mycontroller.countLoops == 4){
+    if(Mycontroller.turn == 1){
+          if(Mycontroller.limit > Mycontroller.MOTOR_DELTAMAX_TURN){
+            Mycontroller.limit = Mycontroller.MOTOR_DELTAMAX_TURN;
+            turnPID.SetOutputLimits(-Mycontroller.limit, Mycontroller.limit);
+          }else{
+            Mycontroller.limit += 0.25;
+            turnPID.SetOutputLimits(-Mycontroller.limit, Mycontroller.limit);
+          }  
+          Serial.println("Median Angular Velocity: " + String(Mycontroller.median_angular_velocity,3) + " Current Angle: " + String(Mycontroller.current_angle,3) + " Steer Correction: " + String(Mycontroller.angleCorrection, 3));
+          turnPID.Compute();
+          Mycontroller.motor_forward(Mycontroller.angleCorrection); //Correction negative - turn left  
+          if(Mycontroller.medianError >= 0.5 && Mycontroller.medianError < 7){
+            turnPID.SetOutputLimits(-40, 40);
+            if(Mycontroller.angleCorrection > 0)   {Mycontroller.angleCorrection = map(Mycontroller.angleCorrection, 0, 40, 37, 40);}
+            else                      {Mycontroller.angleCorrection = map(Mycontroller.angleCorrection, -40, 0, -40, -37);}
+          } 
+          if(Mycontroller.medianError < 0.5){
+            Mycontroller.task_finished = 1;
+            Mycontroller.motor_off();
+            Serial.println("Turn Completed");
+          }  
+          Mycontroller.countLoops = 0;
+          
+    }
+    
+    else if(Mycontroller.drive == 1){ 
+  
+       if(Mycontroller.MOTOR_NOMINAL < Mycontroller.MOTOR_NOMINAL_DRIVE){
+        Mycontroller.MOTOR_NOMINAL += 0.5;
+        }else{
+        Mycontroller.MOTOR_NOMINAL = Mycontroller.MOTOR_NOMINAL_DRIVE;
+        }  
+        if(Mycontroller.limit > Mycontroller.MOTOR_DELTAMAX_DRIVE){
+          Mycontroller.limit = Mycontroller.MOTOR_DELTAMAX_DRIVE;
+          drivePID.SetOutputLimits(-Mycontroller.limit, Mycontroller.limit);
+        }else{
+          Mycontroller.limit += 1.5;
+          drivePID.SetOutputLimits(-Mycontroller.limit,Mycontroller.limit);
+        }       
+        Serial.println("Median Angular Velocity: " + String(Mycontroller.median_angular_velocity,3) + " Current Angle: " + String(Mycontroller.current_angle,3) + " Steer Correction: " + String(Mycontroller.angleCorrection, 3));
+        drivePID.Compute();
+        Mycontroller.motor_forward(Mycontroller.angleCorrection); //Correction positive - turn left
+        Mycontroller.countLoops = 0;
+        Mycontroller.distance_y_covered= Mysensor.total_y-Mycontroller.old_distance_y;
+      
+      if(distance_reached==true){
+            Mycontroller.motor_off();
+            Serial.println("Distance achieved");
+            Mycontroller.task_finished = 1;
+            distance_reached=false;
+            Mycontroller.old_distance_y=Mysensor.total_y;
+        }
+    }
+
+    else if(Mycontroller.off == 1){
+        Mycontroller.motor_off();
+        Mycontroller.task_finished = 1;
+        Serial.println("Off Completed");
+    }
+    
+  }  
+}
+else{
+    if( Direction== "drive"){
+      Mycontroller.target_angle = Mycontroller.current_angle;
+      Mycontroller.MOTOR_NOMINAL = 0;
+      Mycontroller.MOTOR_DELTAMAX = Mycontroller.MOTOR_DELTAMAX_DRIVE;
+      Mycontroller.drive = 1;
+      Mycontroller.turn = 0;
+      Mycontroller.off = 0;
+      Mycontroller.limit = 0;
+      Mycontroller.angleCorrection = 0;
+      Mycontroller.task_finished = 0;
+    }
+    else if(Direction == "turn"){
+      Mycontroller.MOTOR_NOMINAL = 0;
+      Mycontroller.MOTOR_DELTAMAX = Mycontroller.MOTOR_DELTAMAX_TURN;
+      Mycontroller.limit = 0;
+      Mycontroller.drive = 0;
+      Mycontroller.turn = 1;
+      Mycontroller.off = 0;
+      Mycontroller.angleCorrection = 0;
+      Mycontroller.task_finished = 0;
+    }
+    else if(Direction == "off"){
+      Mycontroller.MOTOR_NOMINAL = 0;
+      Mycontroller.MOTOR_DELTAMAX = 0;
+      Mycontroller.drive = 0;
+      Mycontroller.turn = 0;
+      Mycontroller.off = 1;
+      Mycontroller.limit = 0;
+      Mycontroller.angleCorrection = 0;
+      Mycontroller.task_finished = 0;
+    }
+  }
+
+
+}

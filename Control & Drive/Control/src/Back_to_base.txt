@@ -1,0 +1,155 @@
+#include <Arduino.h>
+#include <math.h>
+
+
+
+int x_destination;
+int y_destination;
+int x_current;
+int y_current;
+int theta;
+int rotate_angle_to_90;
+int rotate_angle_to_dest;
+String direction_to_90;
+String direction_to_dest;
+int x_diff = x_destination-x_current;
+int y_diff= y_destination-y_current;
+double distance_to_travel=sqrt(((x_diff)^2)+((y_diff)^2));
+
+
+void back_to_90(){
+ if (0<=theta<=90){
+     rotate_angle_to_90= 90-theta;
+	 direction_to_90 = "CCW";
+  }
+  else if (90<theta<=180){
+      rotate_angle_to_90= theta-90;
+	  direction_to_90 = "CW";
+  }
+  else if (180<theta<=270){
+    rotate_angle_to_90=theta-90;
+	direction_to_90 = "CW"; 
+  }
+  else if (270<theta<360){
+    rotate_angle_to_90=360-theta;
+	direction_to_90 = "CCW";
+  }
+}
+
+void rotate_to_destination (){
+	int pi=3.141592654;
+
+	if (x_diff==0 && y_diff==0 ){
+		rotate_angle_to_dest=0;
+		direction_to_dest="CW";
+	}
+	else if (x_diff==0 && y_diff>0){
+		rotate_angle_to_dest=0;
+		direction_to_dest="CW";
+	}
+	else if (x_diff==0 && y_diff<0){
+		rotate_angle_to_dest=180;
+		direction_to_dest="CW";
+	}
+	else if(x_diff>0 && y_diff==0){
+		rotate_angle_to_dest=90;
+		direction_to_dest="CW";
+
+	}
+	else if(x_diff<0 && y_diff==0){
+		rotate_angle_to_dest=90;
+		direction_to_dest="ACW";
+	}
+
+	else if (x_diff>0 && y_diff>0){
+		direction_to_dest="CW";
+		rotate_angle_to_dest=90- (atan(y_diff/x_diff))*(180/pi);
+	}
+	else if (x_diff<0 && y_diff>0){
+		direction_to_dest="ACW";
+		rotate_angle_to_dest=90-abs(atan(y_diff/x_diff))*(180/pi);
+	}
+	else if (x_diff<0 && y_diff<0){
+		direction_to_dest="ACW";
+		rotate_angle_to_dest=90+ (atan(y_diff/x_diff))*(180/pi);
+	}
+	else if (x_diff>0 && y_diff<0){
+		direction_to_dest="CW";
+		rotate_angle_to_dest=90+ abs(atan(y_diff/x_diff)*(180/pi));
+	}
+ 
+}
+
+
+bool back_to_base;
+unsigned long CS;
+int obstacle;
+int end;
+String motor_direction;
+int distance_travelled;
+int counter;
+int input=0b00;    
+String speed="average";                 
+
+
+struct State {
+String motor_direction_output;
+int distance_output;              
+unsigned long Next[4];                  // list of next states 2 inputs so 2 is the size of the array
+};
+
+typedef const struct State STyp;
+#define Stop    0   			        // stop
+#define f1      1   			        // regular forward
+#define right1  2   			        // beginning of the obstacle avoidance sequence
+#define f2      3   			        // forward of the obstacle avoidance sequence
+#define left1   4   			        // left of the obstacle avoidance sequence
+#define f3      5   			        // the 2nd forward of the obstacle avoidance sequence
+#define left2   6                       // the 2nd left of the obstacle avoidance sequence
+#define f4      7   			        // the 3rd forward of the obstacle avoidance sequence
+#define right2  8  			            // the last right of the obstacle avoidance sequence
+#define stop2    9                       // the rover stops once the destination is reached
+
+
+STyp FSM[10] = {  
+{"STOP"   , 0 , { f1     , right1 , stop2, stop2 }},                                      // Stop 
+{"FORWARD", 2 , { f1     , right1 , stop2, stop2 }},                                      // f1 
+{"RIGHT"  , 0 , { f2     , right1 , stop2, stop2 }},                                      // right1 
+{"FORWARD", 2 , { left1  , right1 , stop2, stop2 }},                                      // f2 
+{"LEFT"   , 0 , { f3     , right1 , stop2, stop2 }},                                      // left1 
+{"FORWARD", 2 , { left2  , right1 , stop2, stop2 }},                                      // f3
+{"RIGHT"  , 0 , { f4     , right1 , stop2, stop2 }},                                      // left2
+{"FORWARD", 2 , { right2 , right1 , stop2, stop2 }},                                      // f4
+{"RIGHT"  , 0 , { f1     , right1 , stop2, stop2 }},                                      // right2
+{"RIGHT"  , 0 , { f1     , right1 , stop2, stop2 }}                                        // stop2
+};
+
+
+void setup(){
+  CS = Stop;  
+}
+
+void loop(){
+    int count;
+
+    
+     
+                // Assigning variables to FSM values
+                motor_direction = FSM[CS].motor_direction_output;  
+                distance_travelled = FSM[CS].distance_output;
+                if (CS == f1 || CS == f3){
+                    counter+= distance_travelled;
+
+                }
+                if (counter>=distance_to_travel){
+                    end=1;
+        
+                }
+                input= obstacle |  end;  
+                // Move to
+                CS = FSM[CS].Next[input];
+}
+
+
+
+

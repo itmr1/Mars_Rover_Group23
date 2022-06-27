@@ -1,0 +1,190 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <PID_v1.h>
+
+
+
+Adafruit_MPU6050 mpu;
+
+
+
+double Kp=1, Ki=0.007, Kd=0.015;
+int MOTOR_NOMINAL = 0;
+int MOTOR_DELTAMAX = 150;
+
+
+
+
+// Motors ===================================================
+// Robot has two motors, one for the right wheel and one for the left
+
+
+
+#define MOTOR_A_IN1 15
+#define MOTOR_A_IN2 13
+#define MOTOR_A_ENA 14
+
+
+
+#define MOTOR_B_IN1 17
+#define MOTOR_B_IN2 16
+#define MOTOR_B_ENA 4
+double pi = 3.14;
+
+
+
+
+
+// Set motor A to given speed (-255..+255); 0 switches off
+void motor_A_set( double speed ) {
+if( speed==0 ) {
+digitalWrite( MOTOR_A_IN1, HIGH );
+digitalWrite( MOTOR_A_IN2, HIGH );
+analogWrite(MOTOR_A_ENA, 0);
+} else if( speed>0 ) {
+digitalWrite( MOTOR_A_IN1, HIGH );
+digitalWrite( MOTOR_A_IN2, LOW );
+analogWrite ( MOTOR_A_ENA, speed);
+} else {
+digitalWrite( MOTOR_A_IN1, LOW );
+digitalWrite( MOTOR_A_IN2, HIGH );
+analogWrite ( MOTOR_A_ENA, -speed);
+}
+}
+
+
+
+// Set motor B to given speed (-255..+255); 0 switches off
+void motor_B_set( double speed ) {
+if( speed==0 ) {
+digitalWrite( MOTOR_B_IN1, HIGH );
+digitalWrite( MOTOR_B_IN2, HIGH );
+analogWrite(MOTOR_B_ENA, 0);
+} else if( speed>0 ) {
+digitalWrite( MOTOR_B_IN1, HIGH );
+digitalWrite( MOTOR_B_IN2, LOW );
+analogWrite ( MOTOR_B_ENA, speed);
+} else {
+digitalWrite( MOTOR_B_IN1, LOW );
+digitalWrite( MOTOR_B_IN2, HIGH );
+analogWrite ( MOTOR_B_ENA, -speed);
+}
+}
+
+
+
+
+// Switches both motors off
+void motor_off() {
+motor_A_set(0);
+motor_B_set(0);
+}
+
+
+
+// Switches both motors to forward (to speed MOTOR_NOMINAL), but B motor 'delta'
+// faster than A motor (delta in range -MOTOR_DELTAMAX..+-MOTOR_DELTAMAX)
+void motor_forward(int delta) {
+if( delta>+MOTOR_DELTAMAX ) delta= +MOTOR_DELTAMAX;
+if( delta<-MOTOR_DELTAMAX ) delta= -MOTOR_DELTAMAX;
+motor_B_set(MOTOR_NOMINAL-delta);
+motor_A_set(MOTOR_NOMINAL+delta);
+}
+
+
+
+
+
+// PID ===================================================
+
+
+
+
+double target_angle = 0, current_angle = 0, angleCorrection = 0, current_angular_velocity = 0;
+double lastTime, currentTime, timeDiff;
+
+
+
+PID myPID(&current_angle, &angleCorrection, &target_angle, Kp, Ki, Kd, DIRECT);
+
+
+
+
+// Main ===================================================
+
+
+
+
+void setup() {
+Serial.begin(115200);
+while (!Serial)
+delay(10); // will pause Zero, Leonardo, etc until serial console opens
+Serial.println("Adafruit MPU6050 test!");
+
+
+
+// Try to initialize!
+if (!mpu.begin()) {
+Serial.println("Failed to find MPU6050 chip");
+while (1) {delay(10);}
+}
+Serial.println("MPU6050 Found!");
+
+
+
+mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
+mpu.setGyroRange(MPU6050_RANGE_250_DEG);
+mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+
+pinMode(MOTOR_A_IN1, OUTPUT);
+pinMode(MOTOR_A_IN2, OUTPUT);
+pinMode(MOTOR_A_ENA, OUTPUT);
+
+
+
+pinMode(MOTOR_B_IN1, OUTPUT);
+pinMode(MOTOR_B_IN2, OUTPUT);
+pinMode(MOTOR_B_ENA, OUTPUT);
+
+
+
+analogWrite(MOTOR_A_ENA, 0);
+analogWrite(MOTOR_B_ENA, 0);
+
+Serial.println("Motors : ok");
+
+myPID.SetOutputLimits(-MOTOR_DELTAMAX, +MOTOR_DELTAMAX);
+myPID.SetMode(AUTOMATIC);
+Serial.println("Ending Setup");
+
+
+
+target_angle = 180;
+}
+
+
+
+
+
+void loop() {
+sensors_event_t a, g, temp;
+mpu.getEvent(&a, &g, &temp);
+current_angular_velocity = g.gyro.z + 0.022;
+Serial.println("Current Angular Velocity: " + String(current_angular_velocity,3) + " Current Angle: " + String(current_angle,3) + " Steer Correction: " + String(angleCorrection, 3));
+myPID.Compute();
+if(angleCorrection > 0){
+  angleCorrection = map(angleCorrection, 0, MOTOR_DELTAMAX, 44, MOTOR_DELTAMAX);
+}else{
+  angleCorrection = -angleCorrection;
+  angleCorrection = map(angleCorrection, 0, MOTOR_DELTAMAX, 44, MOTOR_DELTAMAX);
+  angleCorrection = -angleCorrection;
+}
+motor_forward(angleCorrection); //Correction negative - turn left
+delay(200);
+current_angle += (current_angular_velocity * 0.2)*180/pi;
+
+
+
+}

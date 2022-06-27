@@ -1,0 +1,146 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <stdint.h>
+#include <WiFiClient.h>
+#include <HTTPClient.h>
+#include <NTPClient.h>
+#include <math.h>
+#define RXP1 16
+#define TXP1 17
+
+bool Vision;
+int size;
+int counter=0;
+int id_colour;
+int x_object;
+int y_object;
+double x_object_real;
+double y_object_real;
+int theta=30;
+int x_rover=10;
+int y_rover=10;
+String colour;
+String type;
+double pi=3.141592654;
+
+
+void setup() {
+ Serial1.begin(115200,SERIAL_8N1,RXP1,TXP1);
+ Serial.begin(115200);
+
+
+  
+  // put your setup code here, to run once:
+}
+
+
+void loop() {
+  Vision=false;
+  Serial.println("Not in the loop");
+  if (Serial1.available()){
+    Serial.println("In the loop");
+
+    if (counter==0){
+    
+      id_colour=Serial1.read();
+    
+      switch(id_colour){
+        case 66: 
+          colour="Blue";
+          type="Alien";
+          break;
+        case 69: //Building
+          colour="";
+          type="Building";
+          break;
+        case 71:
+          colour="Green";
+          type="Alien";
+          break;
+        case 76:
+          colour="Lime";
+          type="Alien";
+          break;
+        case 80:
+          colour="Pink";
+          type="Alien";
+          break;
+        case 82:
+          colour="Red";
+          type="Alien";
+          break;
+        case 89:
+          colour="Yellow";
+          type="Alien";
+          break;
+        default:
+          counter=-1;
+    
+      }
+      counter += 1;
+      Serial.println(colour);
+      Serial.println(type);
+    }
+    else if (counter==1){
+      x_object=Serial1.read();
+      if (x_object>=128){
+        x_object -= 256;
+      }
+      
+      counter = 2;
+       Serial.print("x coordinate is: ");
+       Serial.println(x_object);
+    }
+    else if (counter==2){
+      y_object=Serial1.read();
+      //x_object_real= sqrt((pow(x_object,2))+(pow(y_object,2)))*cos(theta-atan(x_object/y_object)*(180/pi))+x_rover;
+      //y_object_real= sqrt((pow(x_object,2))+(pow(y_object,2)))*sin(theta-atan(x_object/y_object)*(180/pi))+y_rover;
+      if(0<=theta<=90){
+      x_object_real=x_object*cos(90-theta)-y_object*sin(90-theta);
+      y_object_real=x_object*sin(90-theta)+y_object*cos(90-theta);
+      }
+      else if (90<theta<=180){
+      x_object_real=x_object*cos(90+theta)-y_object*sin(90+theta)+x_rover;
+      y_object_real=x_object*sin(90+theta)+y_object*cos(90+theta)+y_rover;
+      }
+      else if (180<theta<=270){
+       x_object_real=x_object*cos(180-theta)-y_object*sin(180-theta)+x_rover;
+      y_object_real=x_object*sin(180-theta)+y_object*cos(180-theta)+y_rover;
+      }
+      else if (270<theta<=360){
+      x_object_real=x_object*cos(180+theta)-y_object*sin(180+theta)+x_rover;
+      y_object_real=x_object*sin(180+theta)+y_object*cos(180+theta)+y_rover;
+      }
+
+
+     
+
+      
+      counter=3;
+      Serial.print("y coordinate is: ");
+      Serial.println(y_object);
+
+      Serial.println("the real x coordinate is :");
+      Serial.println(x_object_real);
+      Serial.println("the real y coordinate is :");
+      Serial.println(y_object_real);
+    }
+    else if (counter==3){
+      size=Serial1.read();
+      Vision=true; 
+      counter=0;
+      // Serial.println("Nothing is sent : ");
+      // Serial.println(Serial.read());
+
+    }
+    else{
+      counter=0;
+    }
+  
+  }
+  else{
+    counter=0;
+  }
+}

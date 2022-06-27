@@ -1,0 +1,233 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <stdint.h>
+#include <ArduinoJson.h>
+#include <WiFiClient.h>
+#include <HTTPClient.h>
+#include <NTPClient.h>
+
+//Receive from Command. Send to Drive
+int angle_from_user;
+int distance_from_user;
+
+//Receive from Energy. Send to Command
+float percentage;
+
+//Receive from Vision. Send to Command
+int xcoordinate_alien;
+int ycoordinate_alien;
+String colour;
+String type_of_obstacle;
+
+//Receive from Drive. Send to Command
+int xcoordinate_rover;
+int ycoordinate_rover;
+int angle_rover;
+
+//Receive from Command.
+bool backtobase; 
+bool automate;
+
+//Receive from Radar. Send to Command.
+bool found;
+
+const char* ssid ="Timur9";
+const char* password="1234567890";
+const char* host= "192.168.137.138";
+String getData;
+String GetAddress = "get_name.php";
+// String LinkGet= host+GetAddress ;
+String LinkGet = "192.168.137.138:5000/data/battery";
+String name;
+String table;
+
+
+void initwiFi(){
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to WiFi ..");
+    while(WiFi.status() != WL_CONNECTED){
+        Serial.print(".");
+        delay(1000);
+
+    }
+    Serial.println(WiFi.localIP());
+}
+
+String http_GET_Request(String serverName,  String getData, String table) {
+  WiFiClient client;
+  HTTPClient http;
+  http.begin("192.168.137.138", 5000, table);                                                 //--> Specify request destination
+  http.addHeader("Content-Type", "application/json");                                                  //Specify content-type header
+  int httpCodeGet = http.POST(getData);                                                                //--> Send the request
+  String payload="";
+  if (httpCodeGet>0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpCodeGet);
+    payload = http.getString();
+  }
+  else {
+    Serial.print(httpCodeGet);
+  }
+  http.end();
+  return payload;
+}
+
+String http_receive_Request(String serverName, String table) {
+  DynamicJsonDocument doc(1024);
+  WiFiClient client;
+  HTTPClient http;
+  http.begin("192.168.137.138", 5000, table);                                                 //--> Specify request destination
+  http.addHeader("Content-Type", "application/json");                                                  //Specify content-type header
+  int httpCodeGet = http.GET();                                                                //--> Send the request
+  String payload="";
+  if (httpCodeGet>0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpCodeGet);
+    payload = http.getString();
+    Serial.println(payload);
+    deserializeJson(doc, payload);
+    // JsonObject obj=doc.as<JsonObject>();
+
+
+    if (doc[0]["type"]=="forward" || doc["type"]=="backward"){
+      distance_from_user = doc[0]["input"];
+      Serial.println(distance_from_user);
+
+    }
+    else if (doc[0]["type"]=="rotateCW"){
+       angle_from_user = doc[0]["input"];
+    }
+    else if(doc[0]["type"]=="rotateACW"){
+       angle_from_user = doc["input"]; 
+       angle_from_user= -angle_from_user;  
+    }
+    if(doc[0]["type"]=="BackToBase"){
+      backtobase=1;
+    }
+    if(doc[0]["type"]=="Automate"){
+      automate=1;
+    }
+    
+  }
+  else {
+    Serial.print(httpCodeGet);
+  }
+  http.end();
+  return payload;
+}
+
+
+
+
+void setup() {
+  Serial.begin(115200);
+
+  initwiFi();
+  
+  // put your setup code here, to run once:
+}
+
+void Sensor_to_server(){
+  table="/data/location";
+  StaticJsonDocument<200> doc;
+  doc["ID"]="";
+  JsonObject location = doc.createNestedObject("Location");
+  location["x"]=xcoordinate_rover;
+  location["y"]=ycoordinate_rover;
+  doc["angle"]=angle_rover;
+  getData="";
+  serializeJson(doc,getData);
+  name="";
+  name = http_GET_Request(LinkGet,getData,table);
+  //Serial.println("name: "+name);
+}
+
+void FPGA_to_server(){
+  table="/data/aliens";
+  StaticJsonDocument<200> doc;
+  doc["ID"]="";
+  doc["type"]= type_of_obstacle;
+  doc["Colour"]=colour;
+  JsonObject location = doc.createNestedObject("Location");
+  location["x"]=xcoordinate_alien;
+  location["y"]=ycoordinate_alien;
+  getData="";
+  serializeJson(doc, getData);
+  name="";
+  name = http_GET_Request(LinkGet,getData,table);
+  //Serial.println("name: "+name);
+
+}
+
+void Energy_to_server(){
+  table="/data/battery";
+  getData = "";
+   StaticJsonDocument<200> doc;
+   doc["id"]="";
+   doc["Health"]= String(percentage);
+   getData = "";
+   serializeJson(doc, getData);
+   name="";
+   name = http_GET_Request(LinkGet,getData,table);
+  // Serial.println("name: "+name);
+
+}
+
+void Radar_to_server(){
+   table="/data/aliens";
+   getData="";
+   StaticJsonDocument<200> doc;
+   doc["ID"]="";
+   doc["Colour"]= "";
+   doc["type"]="fan";
+   JsonObject location = doc.createNestedObject("Location");
+   location["x"]=xcoordinate_rover;
+   location["y"]=ycoordinate_rover;
+   serializeJson(doc, getData);
+   name="";
+   name = http_GET_Request(LinkGet,getData,table);
+   //Serial.println("name: "+name);
+}
+
+
+
+void loop() {
+
+
+    unsigned long currentMillis=millis();
+    unsigned long previousMillis=0;
+    unsigned long interval=30000;
+
+    if ((WiFi.status()!= WL_CONNECTED) && (currentMillis - previousMillis >= interval)){
+        Serial.print(millis());
+        Serial.println("Reconnecting to WiFi... ");
+        WiFi.disconnect();
+        WiFi.reconnect();
+        previousMillis=currentMillis;
+    }
+
+  
+
+
+    // if (found == 1){
+    //   Radar_to_server();
+    // }
+    // delay(1000);
+    // Energy_to_server();
+    // delay(1000);
+    // FPGA_to_server();
+    // delay(1000);
+    // Sensor_to_server();
+    // delay(1000);
+    http_receive_Request(LinkGet,"/data/commands");
+    delay(1000);
+
+
+
+
+   
+  // put your main code here, to run repeatedly:
+}

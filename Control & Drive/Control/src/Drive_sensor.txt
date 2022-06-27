@@ -1,0 +1,499 @@
+#include <Arduino.h>
+#include "SPI.h"
+#include <Robojax_L298N_DC_motor.h>
+#include <math.h>
+//Opt Sensor Flow setup
+#define PIN_SS 5
+#define PIN_MISO 19
+#define PIN_MOSI 23
+#define PIN_SCK 18
+#define PIN_MOUSECAM_RESET 35
+#define PIN_MOUSECAM_CS 5
+#define ADNS3080_PIXELS_X 30
+#define ADNS3080_PIXELS_Y 30
+#define ADNS3080_PRODUCT_ID 0x00
+#define ADNS3080_REVISION_ID 0x01
+#define ADNS3080_MOTION 0x02
+#define ADNS3080_DELTA_X 0x03
+#define ADNS3080_DELTA_Y 0x04
+#define ADNS3080_SQUAL 0x05
+#define ADNS3080_PIXEL_SUM 0x06
+#define ADNS3080_MAXIMUM_PIXEL 0x07
+#define ADNS3080_CONFIGURATION_BITS 0x0a
+#define ADNS3080_EXTENDED_CONFIG 0x0b
+#define ADNS3080_DATA_OUT_LOWER 0x0c
+#define ADNS3080_DATA_OUT_UPPER 0x0d
+#define ADNS3080_SHUTTER_LOWER 0x0e
+#define ADNS3080_SHUTTER_UPPER 0x0f
+#define ADNS3080_FRAME_PERIOD_LOWER 0x10
+#define ADNS3080_FRAME_PERIOD_UPPER 0x11
+#define ADNS3080_MOTION_CLEAR 0x12
+#define ADNS3080_FRAME_CAPTURE 0x13
+#define ADNS3080_SROM_ENABLE 0x14
+#define ADNS3080_FRAME_PERIOD_MAX_BOUND_LOWER 0x19
+#define ADNS3080_FRAME_PERIOD_MAX_BOUND_UPPER 0x1a
+#define ADNS3080_FRAME_PERIOD_MIN_BOUND_LOWER 0x1b
+#define ADNS3080_FRAME_PERIOD_MIN_BOUND_UPPER 0x1c
+#define ADNS3080_SHUTTER_MAX_BOUND_LOWER 0x1e
+#define ADNS3080_SHUTTER_MAX_BOUND_UPPER 0x1e
+#define ADNS3080_SROM_ID 0x1f
+#define ADNS3080_OBSERVATION 0x3d
+#define ADNS3080_INVERSE_PRODUCT_ID 0x3f
+#define ADNS3080_PIXEL_BURST 0x40
+#define ADNS3080_MOTION_BURST 0x50
+#define ADNS3080_SROM_LOAD 0x60
+#define ADNS3080_PRODUCT_ID_VAL 0x17
+#define PI 3.14159265
+//Motor Drive setup
+// motor 1 settings
+#define CHA 0
+#define ENA 2 // this pin must be PWM enabled pin if Arduino board is used
+#define IN1 15
+#define IN2 13
+// motor 2 settings
+#define IN3 14
+#define IN4 12
+#define ENB 4// this pin must be PWM enabled pin if Arduino board is used
+#define CHB 1
+const int CCW = 2; // do not change
+const int CW = 1; // do not change
+#define motor1 1 // do not change
+#define motor2 2 // do not change
+// for two motors without debug information // Watch video instruciton for this line: https://youtu.be/2JTMqURJTwg
+Robojax_L298N_DC_motor robot(IN1, IN2, ENA, CHA, IN3, IN4, ENB, CHB);
+/////////////////PID CONSTANTS/////////////////
+double kp=0.5;//3.55
+double ki=0.1;//0.003
+double kd=0;//2.05
+float PID, error, previous_error;
+float pid_p=0;
+float pid_i=0;
+float pid_d=0;
+float elapsedTime, timenow, timePrev;
+///////////////////////////////////////////////
+//Opt Flow variables & functions
+int total_x = 0;
+int total_y = 0;
+int total_x1 = 0;
+int total_y1 = 0;
+int x=0;
+int y=0;
+int a=0;
+int b=0;
+int distance_x=0;
+int distance_y=0;
+int x_now = 0;
+int y_now = 0;
+float R=11.7; //?????
+//maybe differnt than zero (based on the distance between the conrner and the sensor)
+float rover_x = 0, rover_y = 0;
+int rover_angle = 0;
+volatile byte movementflag=0;
+volatile int xydat[2];
+int convTwosComp(int b){
+//Convert from 2's complement
+if(b & 0x80){
+b = -1 * ((b ^ 0xff) + 1);
+}
+return -b;
+}
+int tdistance = 0;
+void mousecam_reset()
+{
+digitalWrite(PIN_MOUSECAM_RESET,HIGH);
+delay(1); // reset pulse >10us
+digitalWrite(PIN_MOUSECAM_RESET,LOW);
+delay(35); // 35ms from reset to functional
+}
+int mousecam_init()
+{
+pinMode(PIN_MOUSECAM_RESET,OUTPUT);
+pinMode(PIN_MOUSECAM_CS,OUTPUT);
+digitalWrite(PIN_MOUSECAM_CS,HIGH);
+mousecam_reset();
+return 0;
+}
+void mousecam_write_reg(int reg, int val)
+{
+digitalWrite(PIN_MOUSECAM_CS, LOW);
+SPI.transfer(reg | 0x80);
+SPI.transfer(val);
+digitalWrite(PIN_MOUSECAM_CS,HIGH);
+delayMicroseconds(50);
+}
+int mousecam_read_reg(int reg)
+{
+digitalWrite(PIN_MOUSECAM_CS, LOW);
+SPI.transfer(reg);
+delayMicroseconds(75);
+int ret = SPI.transfer(0xff);
+digitalWrite(PIN_MOUSECAM_CS,HIGH);
+delayMicroseconds(1);
+return ret;
+}
+struct MD
+{
+byte motion;
+char dx, dy;
+byte squal;
+word shutter;
+byte max_pix;
+};
+void mousecam_read_motion(struct MD *p)
+{
+digitalWrite(PIN_MOUSECAM_CS, LOW);
+SPI.transfer(ADNS3080_MOTION_BURST);
+delayMicroseconds(75);
+p->motion = SPI.transfer(0xff);
+p->dx = SPI.transfer(0xff);
+p->dy = SPI.transfer(0xff);
+p->squal = SPI.transfer(0xff);
+p->shutter = SPI.transfer(0xff)<<8;
+p->shutter |= SPI.transfer(0xff);
+p->max_pix = SPI.transfer(0xff);
+digitalWrite(PIN_MOUSECAM_CS,HIGH);
+delayMicroseconds(5);
+}
+// pdata must point to an array of size ADNS3080_PIXELS_X x ADNS3080_PIXELS_Y
+// you must call mousecam_reset() after this if you want to go back to normal operation
+int mousecam_frame_capture(byte *pdata)
+{
+mousecam_write_reg(ADNS3080_FRAME_CAPTURE,0x83);
+digitalWrite(PIN_MOUSECAM_CS, LOW);
+SPI.transfer(ADNS3080_PIXEL_BURST);
+delayMicroseconds(50);
+int pix;
+byte started = 0;
+int count;
+int timeout = 0;
+int ret = 0;
+for(count = 0; count < ADNS3080_PIXELS_X * ADNS3080_PIXELS_Y; ){
+pix = SPI.transfer(0xff);
+delayMicroseconds(10);
+if(started==0){
+if(pix&0x40)
+started = 1;
+else{
+timeout++;
+if(timeout==100){
+ret = -1;
+break;
+}
+}
+}
+if(started==1){
+pdata[count++] = (pix & 0x3f)<<2; // scale to normal grayscale byte range
+}
+}
+digitalWrite(PIN_MOUSECAM_CS,HIGH);
+delayMicroseconds(14);
+return ret;
+}
+//Motor Drive Functions
+int temp = 0;
+float distance(int xs, int ys, int xcurr, int ycurr){
+return sqrt((xs-xcurr)*(xs-xcurr) + (ys-ycurr)*(ys-ycurr));
+}
+//dont know if this is correct???
+void print_stars(int val, MD md ){
+Serial.print("motion: ");
+Serial.print(md.motion);
+Serial.print(" max_pix: ");
+Serial.println(md.max_pix);
+for(int i=0; i<md.squal/4; i++)
+Serial.print('*');
+Serial.print(' ');
+Serial.print((val*100)/351);
+Serial.print(' ');
+Serial.print(md.shutter); Serial.print(" (");
+Serial.print((int)md.dx); Serial.print(',');
+Serial.print((int)md.dy); Serial.println(')');
+Serial.print('\n');
+Serial.println("Distance_x = " + String(total_x));
+Serial.println("Distance_y = " + String(total_y));
+Serial.print('\n');
+return;
+}
+void motion_detction(){
+int val = mousecam_read_reg(ADNS3080_PIXEL_SUM);
+MD md;
+mousecam_read_motion(&md);
+distance_x = convTwosComp(md.dx)*3.634;    // HERE
+distance_y = convTwosComp(md.dy)*3.634;   // HERE
+total_x1 = total_x1 + distance_x;
+total_y1 = total_y1 + distance_y;
+total_x = total_x1/157;
+total_y = total_y1/157;
+print_stars(val, md);
+}
+void setup()
+{
+
+pinMode(PIN_SS,OUTPUT);
+pinMode(PIN_MISO,INPUT);
+pinMode(PIN_MOSI,OUTPUT);
+pinMode(PIN_SCK,OUTPUT);
+SPI.begin();
+SPI.setClockDivider(SPI_CLOCK_DIV32);
+SPI.setDataMode(SPI_MODE3);
+SPI.setBitOrder(MSBFIRST);
+Serial.begin(115200);
+if(mousecam_init()==-1){
+Serial.println("Mouse cam failed to init");
+while(1);
+}
+robot.begin();
+timenow = millis(); //Start counting time in milliseconds
+}
+char asciiart(int k)
+{
+static char foo[] = "WX86*3I>!;~:,`. ";
+return foo[k>>4];
+}
+byte frame[ADNS3080_PIXELS_X * ADNS3080_PIXELS_Y];
+void motorstop (){
+robot.brake(1);
+robot.brake(2);
+}
+void update_position(int move, float diff){
+//funtion to update rover_x, rover_y, rover_angle
+switch(move){
+case 0: //forward
+rover_x += diff*sin(rover_angle * PI /180);
+rover_y += diff*cos(rover_angle * PI /180);
+break;
+case 1: //backwards
+rover_x -= diff*sin(rover_angle * PI /180);
+rover_y -= diff*cos(rover_angle * PI /180);
+break;
+case 2: //left
+rover_angle += (int) diff;
+rover_angle = rover_angle%360;
+break;
+case 3: //right
+rover_angle -= (int) diff;
+rover_angle = rover_angle%360;
+break;
+default:
+Serial.println("ERROR UPDATING POSITION");
+break;
+}
+}
+void pid(int x, float sp,float &spl,float &spr, int direction){ // direction = 0-> forwards, else backwards
+error = x-total_x;
+timePrev = timenow; // the previous time is stored before the actual time read
+timenow = millis(); // actual time read
+elapsedTime = (timenow - timePrev) / 1000;
+/*Next the proportional value of the PID is just a proportional constant
+*multiplied by the error*/
+pid_p = kp*error;
+/*The integral part should only act if we are close to the
+desired position but we want to fine tune the error. That's
+why I've made a if operation for an error between -3 and 3 degree.
+To integrate we just sum the previous integral value with the
+error multiplied by the integral constant. This will integrate (increase)
+the value each loop till we reach the 0 point*/
+if(-3 <error <3)
+{
+pid_i = pid_i+(ki*error);
+}
+/*The last part is the derivate. The derivate acts upon the speed of the error.
+As we know the speed is the amount of error that produced in a certain amount of
+time divided by that time. For taht we will use a variable called previous_error.
+We substract that value from the actual error and divide all by the elapsed time.
+Finnaly we multiply the result by the derivate constant*/
+//pid_d = 0;
+pid_d = kd*((error - previous_error)/elapsedTime);
+/*The final PID values is the sum of each of this 3 parts*/
+PID = pid_p + pid_i + pid_d;
+/*We know taht the min value of PWM signal is 1000us and the max is 2000. So that
+tells us that the PID value can/s oscilate more than -1000 and 1000 because when we
+have a value of 2000us the maximum value taht we could sybstract is 1000 and when
+we have a value of 1000us for the PWM sihnal, the maximum value that we could add is 1000
+to reach the maximum 2000us*/
+/*Finnaly we calculate the PWM width. We sum the desired throttle and the PID value*/
+if (direction == 0){
+//forward
+spl = sp + PID;
+spr = sp - PID;
+}
+else{
+//backwards
+spl = sp - PID;
+spr = sp + PID;
+}
+/*Once again we map the PWM values to be sure that we won't pass the min
+and max values. Yes, we've already maped the PID values. But for example, for
+throttle value of 1300, if we sum the max PID value we would have 2300us and
+that will mess up the ESC.*/
+//Right
+if(spr < 0)
+{
+spr= 0;
+}
+if(spr > 100)
+{
+spr=100;
+}
+//Left
+if(spl < 0)
+{
+spl= 0;
+}
+if(spl > 100)
+{
+spl=100;
+}
+previous_error = error; //Remember to store the previous error.
+}
+void forward (float motorsp, float dst = 0){
+int x, y;
+x = total_x;
+y = total_y;
+float left,right;
+left = motorsp;
+right = motorsp;
+robot.rotate(motor1, left, CW);
+robot.rotate(motor2, right, CCW);
+while (abs(total_y-y)<dst){
+pid(x,motorsp,left,right,0);
+robot.rotate(motor1, left, CW);
+robot.rotate(motor2, right, CCW);
+motion_detction();
+}
+motorstop();
+update_position(0,dst);
+}
+void backwards (float motorsp, float dst = 0){
+int x, y;
+x = total_x;
+y = total_y;
+float left,right;
+left = motorsp;
+right = motorsp;
+robot.rotate(motor1, left, CW);
+robot.rotate(motor2, right, CCW);
+while (abs(total_y-y)<dst){
+pid(x,motorsp,left,right,1);
+robot.rotate(motor1, left, CW);
+robot.rotate(motor2, right, CCW);
+motion_detction();
+}
+motorstop();
+update_position(1,dst);
+}
+float arc(int x, int y, int xnew, int ynew, int direction){
+float x0 = x - xnew;
+float y0 = y - ynew;
+float d = sqrt(x0*x0 + y0*y0);
+float s = 0.5*d/R;
+float t;
+if (direction==0){
+t = abs(2*asin(-s));
+}
+else{
+t = 2*asin(s);
+}
+/*Serial.print("Values for Sin((a-b)/2): ");
+Serial.print("s = ");
+Serial.print(s);
+Serial.print("Angle = ");
+Serial.println(t*180/PI);*/
+return t;
+}
+void turnleft (float motorsp, float deg){
+int x, y;
+x = total_x;
+y = total_y;
+robot.rotate(motor1, motorsp, CCW);
+robot.rotate(motor2, motorsp, CCW);
+while(abs(total_x-x)/R *180/PI < deg){
+motion_detction();
+}
+motorstop();
+update_position(2,(int)deg);
+}
+void turnright (float motorsp, float deg){
+int x, y;
+x = total_x;
+y = total_y;
+robot.rotate(motor1, motorsp, CW);
+robot.rotate(motor2, motorsp, CW);
+while(abs(total_x-x)/R *180/PI < deg){
+Serial.print("Turn left:");
+Serial.print(abs(total_x-x)/R *180/PI);
+Serial.println("deg");
+motion_detction();
+}
+motorstop();
+update_position(3,(int)deg);
+}
+/*
+void update_values(){
+int phi;
+theta += dtheta;
+if (theta>=360){
+theta=theta-360;
+}
+if (0<=theta<=90){
+x+= distance_y* sin(theta);
+y+= distance_y* cos(theta);
+}
+else if (90<theta<=180){
+phi= 180-theta;
+y+=-distance_y* cos(phi);
+x+= distance_y* sin(phi);
+}
+else if (180<theta<=270){
+phi= 270-theta;
+y+=-distance_y* sin(phi);
+x+=-distance_y* cos(phi);
+}
+else if (270<theta<360){
+phi=360-theta;
+y+= distance_y* cos(phi);
+x+=-distance_y*sin(phi);
+}
+}
+*/
+void print_curr_position(){
+Serial.print("(x,y,angle) = (");
+Serial.print(rover_x);
+Serial.print(", ");
+Serial.print(rover_y);
+Serial.print(", ");
+Serial.print(rover_angle);
+Serial.println(")");
+}
+int t= 0;
+void loop()
+{
+if (t==0){
+//forward(20,3);
+//delay(1000);
+//print_curr_position();
+forward(50,20);
+delay(1000);
+print_curr_position();
+//backwards(20, 3);
+//delay(1000);
+//print_curr_position();
+t=1;
+}
+motorstop();
+//forward(20,15);
+//turnright(12,20);
+//delay(10000);
+// turnleft(20,40);
+// delay(1000);
+//if message {
+// decode
+// ...
+// case 1
+// forward(...)
+// case
+// }
+// else{
+// motorsstop;
+// }
+}

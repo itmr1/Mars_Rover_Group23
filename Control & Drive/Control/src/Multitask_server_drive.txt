@@ -1,0 +1,237 @@
+#include <Arduino.h>
+
+#include <INA219_WE.h>
+#include <WiFi.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <stdint.h>
+#include <WiFiClient.h>
+#include <HTTPClient.h>
+#include <NTPClient.h>
+#include "command.h"
+#include "controller.h"
+#include "sensor.h"
+
+
+#define MOTOR_A_IN1 15
+#define MOTOR_A_IN2 13
+#define MOTOR_A_ENA 2
+
+#define MOTOR_B_IN1 14
+#define MOTOR_B_IN2 12
+#define MOTOR_B_ENA 4
+
+INA219_WE ina219;
+sensor Mysensor;
+controller Mycontroller;
+RunningMedian offsetSamples = RunningMedian(30);
+RunningMedian gyroSamples = RunningMedian(5);
+RunningMedian lastError = RunningMedian(5);
+bool distance_reached;
+
+// Interrupts ===================================================
+    volatile int interruptCounter;
+ 
+    hw_timer_t * timer = NULL;
+    portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+ 
+    void IRAM_ATTR onTimer() {
+        portENTER_CRITICAL_ISR(&timerMux);
+        interruptCounter++;
+        portEXIT_CRITICAL_ISR(&timerMux);
+    }
+
+
+PID turnPID(&Mycontroller.current_angle, &Mycontroller.angleCorrection, &Mycontroller.target_angle, Mycontroller.Kp_turn, Mycontroller.Ki_turn, Mycontroller.Kd_turn, DIRECT);
+PID drivePID(&Mycontroller.current_angle, &Mycontroller.angleCorrection, &Mycontroller.target_angle, Mycontroller.Kp_drive, Mycontroller.Ki_drive, Mycontroller.Kd_drive, DIRECT);
+
+
+
+int count=0;
+//Variables used for Vision
+bool Vision=false;    // Is true when a full message has been sent (colour,type, x and y)
+int counter=0;        //to know what is being sent
+int id_colour;        //before converting using the ASCII table to get the character we get this number
+int x_object;         //x of the obstace in regards to the rover
+int y_object;         //y of the obstacle in regards to the rover
+int x_object_real;    //real x of the obstacle on the map
+int y_object_real;    //real y of the obstacle on the map          
+String colour;        //colour of obstacle if its an alien
+String type;          //type of the obstacle
+int size_of_object;   // width of the ball or the building
+
+//Receive from Command. Send to Drive
+int angle_from_user;
+int distance_from_user;
+
+//Receive from Energy. Send to Command
+float percentage;
+
+//Receive from Vision. Send to Command
+int xcoordinate_alien;
+int ycoordinate_alien;
+// String colour;
+// String type_of_obstacle;
+
+//Receive from Drive. Send to Command
+int xcoordinate_rover=0;
+int ycoordinate_rover=0;
+int angle_of_rover=30;
+
+//Receive from Command.
+bool backtobase; 
+bool automate;
+
+//Receive from Radar. Send to Command.
+bool found;
+
+TaskHandle_t Task2;
+TaskHandle_t Task1;
+TaskHandle_t Task3;
+
+
+command Mycommand;
+
+
+void Task2code(void* parameter);
+void Task1code(void* parameter);
+void Task3code(void* parameter);
+
+
+void setup(){
+  Serial.begin(115200);
+  Wire.begin(33,32);
+  Wire.setClock(700000);
+  ina219.init();
+  Mycommand.initwiFi();
+  xTaskCreatePinnedToCore(Task2code,"Task2",10000,NULL,1,&Task2,tskNO_AFFINITY);
+  delay(1);
+  //Drive setup
+      //Timer setup
+    Mycontroller.MOTOR_DELTAMAX = Mycontroller.MOTOR_DELTAMAX_TURN;
+    Mysensor.setup();
+  // PID ===================================================
+
+    timer = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer, &onTimer, true);
+    timerAlarmWrite(timer, 20000, true);
+    timerAlarmEnable(timer);
+
+    //IO Setup
+    pinMode(MOTOR_A_IN1, OUTPUT);
+    pinMode(MOTOR_A_IN2, OUTPUT);
+    pinMode(MOTOR_A_ENA, OUTPUT);
+
+    pinMode(MOTOR_B_IN1, OUTPUT);
+    pinMode(MOTOR_B_IN2, OUTPUT);
+    pinMode(MOTOR_B_ENA, OUTPUT);
+
+    pinMode(12, OUTPUT);
+    Mycontroller.motor_off();
+    //Gyro and Serial Port initialization
+    Serial.begin(115200);
+    while (!Serial)
+    delay(10);
+    Serial.println("Adafruit MPU6050 test!");
+    if (!Mycontroller.mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {delay(10);}
+    }
+    Serial.println("MPU6050 Found!");
+
+
+      //Gyroscope setup
+    Mycontroller.mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+    Mycontroller.mpu.setGyroRange(MPU6050_RANGE_2000_DEG);
+    Mycontroller.mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+    Mycontroller.gyro_offset = Mycontroller.find_gyro_offset();
+
+    //IO Setup
+
+    Mycontroller.motor_off();
+    Serial.println("Motors : ok");
+    //PID setup
+    turnPID.SetMode(AUTOMATIC);
+    drivePID.SetMode(AUTOMATIC);
+
+    Serial.println("Ending Setup");
+    xTaskCreatePinnedToCore(Task1code,"Task1",100000,NULL,0,&Task1,tskNO_AFFINITY);
+    delay(1);
+    xTaskCreatePinnedToCore(Task3code,"Task3",10000,NULL,1,&Task3,tskNO_AFFINITY);
+    delay(1);
+    Serial.println("Ending Setup");
+}
+
+void Task1code (void* parameter){
+    Serial.print("Task1 running on core : ");
+    Serial.println(xPortGetCoreID());
+    for (;;){
+    //Drive code 
+  if(Mycontroller.task_finished == 0){
+  //Calculate current angle ================================
+  if (interruptCounter > 0) {
+    portENTER_CRITICAL(&timerMux);
+    interruptCounter--;
+    portEXIT_CRITICAL(&timerMux);
+    sensors_event_t a, g, temp;
+    Mycontroller.mpu.getEvent(&a, &g, &temp);
+    Mycontroller.current_angular_velocity = g.gyro.z - Mycontroller.gyro_offset;
+    gyroSamples.add(Mycontroller.current_angular_velocity);
+    Mycontroller.median_angular_velocity = gyroSamples.getMedian();
+    Mycontroller.current_angle -= (Mycontroller.median_angular_velocity * 0.02)*180/Mycontroller.pi;
+    Mycontroller.user_angle = Mycontroller.angle_PID_to_user(Mycontroller.current_angle);
+    Mycontroller.countLoops++;
+    Mycontroller.error = abs(Mycontroller.target_angle - Mycontroller.current_angle);
+    lastError.add(Mycontroller.error);
+    Mycontroller.medianError = lastError.getMedian();
+    if (Mycommand.Direction == "drive"){
+      Mysensor.motion_detction();
+      Mysensor.update_values(Mycontroller.angle_PID_to_user(Mycontroller.current_angle));
+      //Serial.println("  Distance: " + String((Mysensor.total_y)));
+      //Serial.println(abs(Mycontroller.distance_y_covered-Mycommand.distance_from_user));
+      if (abs(Mycontroller.distance_y_covered-Mycommand.distance_from_user)<=2){
+        distance_reached=true;
+      }
+     }
+  }
+  Mycontroller.loopdrive1(Mycommand.Direction,turnPID,drivePID,Mysensor.total_y);
+  
+  }
+  else {
+    Mycontroller.loopdrive2(Mycommand.Direction,Mycommand.angle_from_user);
+  }
+ 
+   vTaskDelay(1);     
+
+}
+}
+
+
+void Task2code(void*  parameter){
+  Serial.print("Task2 running on core : ");
+  Serial.println(xPortGetCoreID());
+  for(; ;){
+    Mycommand.reconnect();
+    Mycommand.http_receive_Request(Mycommand.LinkGet,"/data/commands");
+    vTaskDelay(1);
+
+  }
+}
+
+void Task3code (void* parameter){
+    Serial.print("Task3 running on core : ");
+    Serial.println(xPortGetCoreID());
+    for (;;){
+      Mycommand.reconnect();
+      Mycommand.Sensor_to_server(Mysensor.x,Mysensor.y,Mycontroller.angle_PID_to_user(Mycontroller.current_angle),Mycontroller.task_finished);
+      vTaskDelay(1);
+    }
+}
+
+
+
+
+
+void loop (){
+//
+}

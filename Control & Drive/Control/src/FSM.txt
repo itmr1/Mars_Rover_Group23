@@ -1,0 +1,107 @@
+#include <Arduino.h>
+
+bool autonomous_sweep;
+unsigned long CS;
+int obstacle;           
+String type_of_obstacle;     //Alien or building
+int time_to_turn;            //because outer square edge has been completed
+String motor_direction;            
+int distance;
+int counter;
+int input=0b00;
+int size_of_obstacle;       //Sent from Vision  
+int dist_to_go_forward;      //Determined depending on the size of the edge of the squae we are now going in                  
+
+
+struct State {
+String motor_direction_output;
+int distance_output;              
+unsigned long Next[4];                  // list of next states 2 inputs so 2 is the size of the array
+};
+
+typedef const struct State STyp;
+#define Stop    0   			        // stop
+#define f1      1   			        // regular forward
+#define right1  2   			        // beginning of the obstacle avoidance sequence
+#define f2      3   			        // forward of the obstacle avoidance sequence
+#define left1   4   			        // left of the obstacle avoidance sequence
+#define f3      5   			        // the 2nd forward of the obstacle avoidance sequence
+#define left2   6                       // the 2nd left of the obstacle avoidance sequence
+#define f4      7   			        // the 3rd forward of the obstacle avoidance sequence
+#define right2  8  			            // the last right of the obstacle avoidance sequence
+#define right3  9                       // the right taken once the counter has reached its max 
+
+
+STyp FSM[10] = {  
+{"STOP"   , 0 , { f1     , right1 , right3, right3 }},                                      // Stop 
+{"FORWARD", dist_to_go_forward , { f1     , right1 , right3, right3 }},                                      // f1 
+{"RIGHT"  , 0 , { f2     , right1 , right3, right3 }},                                      // right1 
+{"FORWARD", size_of_obstacle , { left1  , right1 , right3, right3 }},                                      // f2 
+{"LEFT"   , 0 , { f3     , right1 , right3, right3 }},                                      // left1 
+{"FORWARD", size_of_obstacle, { left2  , right1 , right3, right3 }},                                      // f3
+{"RIGHT"  , 0 , { f4     , right1 , right3, right3 }},                                      // left2
+{"FORWARD", size_of_obstacle , { right2 , right1 , right3, right3 }},                                      // f4
+{"RIGHT"  , 0 , { f1     , right1 , right3, right3 }},                                      // right2
+{"RIGHT"  , 0 , { f1     , right1 , right3, right3 }}                                       // right3
+};
+
+// Add x to the size of the building (marge d erreur)
+// For obstacle detection check if the obstacle is going to hit the rover (for building divide the size by 2 then add to the coordinate you can ceck if x is positive or negative)
+// if obstacle is detected adjust the dist to get to a threshold (the distance in front of the obstacle where we turn should be set)
+// Make the dist to go forward smaller as the squares get smaller
+
+void setup(){
+  CS = Stop;  
+}
+
+void loop(){
+    int i;
+    int count;
+    time_to_turn=0b00;
+    //Maybe you shouls add a condition to not go to the next state until drive tells you that the commad has been executed (Like an if statement)
+
+    
+     
+    // Assigning variables to FSM values
+    motor_direction = FSM[CS].motor_direction_output;  
+    distance = FSM[CS].distance_output;
+
+    //No need for that anymore
+    if (CS == f2 && type_of_obstacle=="Building"){
+         distance = 10;   //insert size of building how much to move right  
+    }
+    if (CS == f3 && type_of_obstacle=="Building"){
+
+    }
+
+    //This is needed
+    if (CS == f1 || CS == f3){
+        counter+= distance;
+
+    }
+    if (counter=i){
+        count += 1;
+        counter=0;
+        time_to_turn=0b01;
+    }
+    if (count=3){
+        count=0;
+        i=i-1; 
+    }
+        input= obstacle |  time_to_turn;  
+        // Move to
+        CS = FSM[CS].Next[input];
+}
+
+
+// distance=10
+// f1 && f3--> distance to subtract from the initial 
+// everytime it get to 0 it turns right and restarts 
+// 3 times for each value then subtracts one
+
+
+// You need to check how far away it can detect and obstacle and play with the distance accordingly.
+// This is only for two corners for two others you have to change the direction
+// Krish will send you the width of the obstacle which should be the distance with a margin pof error
+// Ypu might need t remove the distance as an output and just put it as an if statement
+

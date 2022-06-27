@@ -1,0 +1,159 @@
+#include <Arduino.h>
+#include "command.h"
+#define RXP1 16
+#define TXP1 17
+
+command Mycommand;
+
+unsigned long Start;
+bool Time;
+
+//Variables used for Vision
+bool Vision=false;    // Is true when a full message has been sent (colour,type, x and y)
+int counter=0;        //to know what is being sent
+int id_colour;        //before converting using the ASCII table to get the character we get this number
+int x_object;         //x of the obstace in regards to the rover
+int y_object;         //y of the obstacle in regards to the rover
+int x_object_real;    //real x of the obstacle on the map
+int y_object_real;    //real y of the obstacle on the map          
+String colour;        //colour of obstacle if its an alien
+String type;          //type of the obstacle
+int size_of_object;   // width of the ball or the building
+
+//Receive from Command. Send to Drive
+int angle_from_user;
+int distance_from_user;
+
+//Receive from Energy. Send to Command
+float percentage;
+
+//Receive from Vision. Send to Command
+int xcoordinate_alien;
+int ycoordinate_alien;
+// String colour;
+// String type_of_obstacle;
+
+//Receive from Drive. Send to Command
+int xcoordinate_rover=0;
+int ycoordinate_rover=0;
+int angle_rover=90;
+
+//Receive from Command.
+bool backtobase; 
+bool automate;
+
+//Receive from Radar. Send to Command.
+bool found;
+
+
+void setup(){
+    Serial.begin(115200);
+    Serial1.begin(115200,SERIAL_8N1,RXP1,TXP1);
+    Mycommand.initwiFi();
+    Start=millis();
+
+}
+
+
+
+void loop() {
+
+  //Vision part:
+  Vision=false;
+  if (Serial1.available()){
+
+    if (counter==0){
+    
+      id_colour=Serial1.read();
+    
+      switch(id_colour){
+        case 66: 
+          colour="blue";
+          type="alien";
+          break;
+        case 69: //Building
+          colour="";
+          type="building";
+          break;
+        case 71:
+          colour="green";
+          type="alien";
+          break;
+        case 76:
+          colour="lime";
+          type="alien";
+          break;
+        case 80:
+          colour="pink";
+          type="alien";
+          break;
+        case 82:
+          colour="red";
+          type="alien";
+          break;
+        case 89:
+          colour="yellow";
+          type="alien";
+          break;
+        default:
+          counter=-1;
+    
+      }
+      counter += 1;
+      Serial.println(colour);
+      Serial.println(type);
+    }
+    else if (counter==1){
+      x_object=Serial1.read();
+      if (x_object>=128){
+        x_object -= 256;
+      }
+      counter = 2;
+      // Serial.print("x coordinate is: ");
+      // Serial.println(x_object);
+    }
+    else if (counter==2){
+      y_object=Serial1.read();
+      x_object_real=(sqrt((x_object^2)+(y_object^2))*cos(angle_rover-atan(x_object/y_object)))+xcoordinate_rover;
+      y_object_real=(sqrt((x_object^2)+(y_object^2))*sin(angle_rover-atan(x_object/y_object)))+ycoordinate_rover;
+      counter=3;
+      // Serial.print("y coordinate is: ");
+      // Serial.println(y_object);
+    }
+    else if (counter==3){
+      size_of_object=Serial1.read();
+      Vision=true; 
+      counter=0;
+      // Serial.println("Nothing is sent : ");
+      // Serial.println(Serial.read());
+
+    }
+    else{
+      counter=0;
+    }
+  
+  }
+  else{
+    counter=0;
+  }
+
+  //Command part:
+    Mycommand.reconnect();
+    // if (found == 1){
+    //   Mycommand.Radar_to_server(20,10);
+    // }
+    // delay(1000);
+    // Mycommand.Energy_to_server(90);
+    if (Vision){
+      Mycommand.FPGA_to_server(x_object_real,y_object_real,type,colour,size_of_object);
+
+    }
+    // delay(1000);
+    // Mycommand.Sensor_to_server(80,70,90);
+    // delay(1000);
+
+   
+  // put your main code here, to run repeatedly:
+}
+
+//Size of arena 233.7 x 355.5cm
