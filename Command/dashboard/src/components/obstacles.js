@@ -34,7 +34,8 @@ const Obstacles = () => {
             return;
         }
           
-        if(info[0]){    
+        if(info[0]){   
+            if(info[0].Location.x === 0 && info[0].Location.y === 0){return;} 
             if(currObstacles.some(item => (info[0].Location.x < item.x+5) && (item.x-5 < info[0].Location.x) && (info[0].Location.y < item.y+5) && (item.y-5 < info[0].Location.y))){
                 
             }

@@ -72,6 +72,7 @@ const Cont = ({ Inputs, Position, setStat }) => {
       return;
     }
     if (obstacleinfo[0]) {
+      if(obstacleinfo[0].Location.x === 0 && obstacleinfo[0].Location.y === 0){return;} 
       if (obstacleinfo[0].type !== "fan") {
         if (obstacles.some(item => (/*obstacle.Location.x*/obstacleinfo[0].Location.x < item.x + 5) && (item.x - 5 < obstacleinfo[0].Location.x/*obstacle.Location.x*/) && (/*obstacle.Location.y*/obstacleinfo[0].Location.y < item.y + 5) && (item.y - 5 < /*obstacle.Location.y*/obstacleinfo[0].Location.y))) {
           //console.log("already used alien coord")

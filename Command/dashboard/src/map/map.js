@@ -111,7 +111,8 @@ const Map = ({Pos, roverclear}) => {
             //return; DONT RETURN D:
         }
         if(alienInfo[0]){
-            if(dataObstacle.some(item => (/*obstacle.Location.x*/alienInfo[0].Location.x < item.x+5) && (item.x-5 < alienInfo[0].Location.x/*obstacle.Location.x*/) && (/*obstacle.Location.y*/alienInfo[0].Location.y < item.y+5) && (item.y-5 < /*obstacle.Location.y*/alienInfo[0].Location.y))){
+            if(alienInfo[0].Location.x === 0 && alienInfo[0].Location.y === 0){} 
+            else if(dataObstacle.some(item => (/*obstacle.Location.x*/alienInfo[0].Location.x < item.x+5) && (item.x-5 < alienInfo[0].Location.x/*obstacle.Location.x*/) && (/*obstacle.Location.y*/alienInfo[0].Location.y < item.y+5) && (item.y-5 < /*obstacle.Location.y*/alienInfo[0].Location.y))){
                 //console.log("COLOURS: "+colorAlien)
             }
             
