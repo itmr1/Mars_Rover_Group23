@@ -16,7 +16,6 @@ const connection = mysql.createConnection({
     host:"localhost",
     database:"sensordata",
     user:"root",
-    password:"MarsRover189"
 })
 
 //Run the express app
